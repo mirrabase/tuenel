@@ -69,6 +69,11 @@ const groups = [
       { href: "/operator", label: "Overview", icon: GaugeIcon },
       { href: "/operator/tenants", label: "Tenants", icon: BuildingsIcon },
       {
+        href: "/operator/projects",
+        label: "Projects",
+        icon: CirclesThreePlusIcon,
+      },
+      {
         href: "/operator/providers",
         label: "Providers",
         icon: PlugsConnectedIcon,
@@ -76,6 +81,7 @@ const groups = [
       { href: "/operator/routing", label: "Routing", icon: TreeStructureIcon },
       { href: "/operator/pricing", label: "Pricing", icon: CoinsIcon },
       { href: "/operator/policies", label: "Policies", icon: ShieldCheckIcon },
+      { href: "/operator/quotas", label: "Quotas", icon: GaugeIcon },
       { href: "/operator/ledger", label: "Ledger", icon: DatabaseIcon },
       { href: "/operator/system", label: "System", icon: ActivityIcon },
       {

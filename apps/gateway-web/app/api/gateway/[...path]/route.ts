@@ -1,4 +1,5 @@
 import { gatewayApiUrl, sessionCredential } from "@/lib/server-auth"
+import { hasValidOrigin } from "@/lib/request-origin"
 
 const rules: [RegExp, ReadonlySet<string>][] = [
   [/^\/(health|ready|openapi\.json)$/, new Set(["GET"])],
@@ -28,10 +29,7 @@ async function forward(
       { error: { code: "not_found", message: "Gateway path is not allowed" } },
       { status: 404 }
     )
-  if (
-    !["GET", "HEAD"].includes(request.method) &&
-    request.headers.get("origin") !== incoming.origin
-  )
+  if (!["GET", "HEAD"].includes(request.method) && !hasValidOrigin(request))
     return Response.json(
       { error: { code: "invalid_origin", message: "Invalid request origin" } },
       { status: 403 }

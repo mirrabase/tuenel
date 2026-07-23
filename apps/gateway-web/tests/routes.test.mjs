@@ -13,10 +13,12 @@ const routes = [
   "/docs",
   "/operator",
   "/operator/tenants",
+  "/operator/projects",
   "/operator/providers",
   "/operator/routing",
   "/operator/pricing",
   "/operator/policies",
+  "/operator/quotas",
   "/operator/ledger",
   "/operator/system",
   "/operator/integrations",
@@ -49,6 +51,26 @@ test("browser credentials are never persisted in script-readable storage", () =>
     .map((file) => readFileSync(join(root, file), "utf8"))
     .join("\n")
   assert.equal(/localStorage|sessionStorage/.test(source), false)
-  assert.equal(/mock-store|mock-data|MockProvider|useMockGateway/.test(source), false)
+  assert.equal(
+    /mock-store|mock-data|MockProvider|useMockGateway/.test(source),
+    false
+  )
   assert.match(source, /fetch\s*\(|gatewayFetch/)
+})
+
+test("operator mutations use dedicated forms instead of raw JSON", () => {
+  const source = readFileSync(
+    join(root, "components/pages/platform-pages.tsx"),
+    "utf8"
+  )
+  assert.doesNotMatch(source, /JSON fields|JSON\.parse\(details\)/)
+  for (const form of [
+    "ProjectForm",
+    "ProviderForm",
+    "RoutingForm",
+    "PricingForm",
+    "PolicyForm",
+    "QuotaForm",
+  ])
+    assert.match(source, new RegExp(`function ${form}`))
 })
