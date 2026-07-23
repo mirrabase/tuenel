@@ -4,3 +4,12 @@ version.workspace = true
 edition.workspace = true
 license.workspace = true
 rust-version.workspace = true
+
+[dependencies]
+async-trait.workspace = true
+chrono.workspace = true
+futures.workspace = true
+gateway-types = { path = "../gateway-types" }
+thiserror.workspace = true
+tokio.workspace = true
+uuid.workspace = true

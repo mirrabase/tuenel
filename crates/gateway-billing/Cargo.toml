@@ -4,3 +4,17 @@ version.workspace = true
 edition.workspace = true
 license.workspace = true
 rust-version.workspace = true
+
+[dependencies]
+async-trait.workspace = true
+base64.workspace = true
+chrono.workspace = true
+gateway-secrets = { path = "../gateway-secrets" }
+gateway-types = { path = "../gateway-types" }
+hmac.workspace = true
+reqwest.workspace = true
+serde_json.workspace = true
+sha2.workspace = true
+thiserror.workspace = true
+tokio.workspace = true
+uuid.workspace = true

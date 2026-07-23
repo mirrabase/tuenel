@@ -1,0 +1,7 @@
+/target
+/.git
+/graphify-out
+/apps/gateway-web/node_modules
+/apps/gateway-web/.next
+.env
+*.log

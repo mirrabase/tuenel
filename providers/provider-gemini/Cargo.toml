@@ -1,0 +1,15 @@
+[package]
+name = "provider-gemini"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+
+[dependencies]
+async-trait.workspace = true
+gateway-providers = { path = "../../crates/gateway-providers" }
+gateway-types = { path = "../../crates/gateway-types" }
+reqwest.workspace = true
+secrecy.workspace = true
+serde.workspace = true
+url.workspace = true

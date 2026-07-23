@@ -4,3 +4,17 @@ version.workspace = true
 edition.workspace = true
 license.workspace = true
 rust-version.workspace = true
+
+[dependencies]
+argon2.workspace = true
+base64.workspace = true
+chrono.workspace = true
+gateway-store = { path = "../gateway-store" }
+gateway-types = { path = "../gateway-types" }
+rand.workspace = true
+thiserror.workspace = true
+uuid.workspace = true
+
+[dev-dependencies]
+store-memory = { path = "../../stores/store-memory" }
+tokio.workspace = true

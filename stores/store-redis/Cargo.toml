@@ -1,0 +1,15 @@
+[package]
+name = "store-redis"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+
+[dependencies]
+async-trait.workspace = true
+gateway-mcp = { path = "../../crates/gateway-mcp" }
+gateway-quota = { path = "../../crates/gateway-quota" }
+gateway-types = { path = "../../crates/gateway-types" }
+redis.workspace = true
+thiserror.workspace = true
+uuid.workspace = true

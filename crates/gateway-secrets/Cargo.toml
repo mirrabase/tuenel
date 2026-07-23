@@ -4,3 +4,12 @@ version.workspace = true
 edition.workspace = true
 license.workspace = true
 rust-version.workspace = true
+
+[dependencies]
+aes-gcm.workspace = true
+async-trait.workspace = true
+base64.workspace = true
+gateway-types = { path = "../gateway-types" }
+rand.workspace = true
+thiserror.workspace = true
+uuid.workspace = true

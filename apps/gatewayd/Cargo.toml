@@ -5,3 +5,45 @@ edition.workspace = true
 license.workspace = true
 rust-version.workspace = true
 publish = false
+
+[dependencies]
+async-trait.workspace = true
+axum.workspace = true
+chrono.workspace = true
+gateway-auth = { path = "../../crates/gateway-auth" }
+gateway-approval = { path = "../../crates/gateway-approval" }
+gateway-billing = { path = "../../crates/gateway-billing" }
+gateway-config = { path = "../../crates/gateway-config" }
+gateway-core = { path = "../../crates/gateway-core" }
+gateway-keys = { path = "../../crates/gateway-keys" }
+gateway-incidents = { path = "../../crates/gateway-incidents" }
+gateway-events = { path = "../../crates/gateway-events" }
+gateway-mcp = { path = "../../crates/gateway-mcp" }
+gateway-metering = { path = "../../crates/gateway-metering" }
+gateway-observability = { path = "../../crates/gateway-observability" }
+gateway-policy = { path = "../../crates/gateway-policy" }
+gateway-pricing = { path = "../../crates/gateway-pricing" }
+gateway-providers = { path = "../../crates/gateway-providers" }
+gateway-quota = { path = "../../crates/gateway-quota" }
+gateway-routing = { path = "../../crates/gateway-routing" }
+gateway-secrets = { path = "../../crates/gateway-secrets" }
+gateway-security = { path = "../../crates/gateway-security" }
+gateway-server = { path = "../../crates/gateway-server" }
+gateway-store = { path = "../../crates/gateway-store" }
+gateway-types = { path = "../../crates/gateway-types" }
+provider-openai-compatible = { path = "../../providers/provider-openai-compatible" }
+provider-anthropic = { path = "../../providers/provider-anthropic" }
+provider-gemini = { path = "../../providers/provider-gemini" }
+mcp-transport-http = { path = "../../mcp/mcp-transport-http" }
+mcp-transport-stdio = { path = "../../mcp/mcp-transport-stdio" }
+security-secrets = { path = "../../security/security-secrets" }
+security-sensitive-data = { path = "../../security/security-sensitive-data" }
+security-prompt-injection = { path = "../../security/security-prompt-injection" }
+secrecy.workspace = true
+serde_json.workspace = true
+sqlx.workspace = true
+store-postgres = { path = "../../stores/store-postgres" }
+store-redis = { path = "../../stores/store-redis" }
+tokio.workspace = true
+tracing.workspace = true
+uuid.workspace = true

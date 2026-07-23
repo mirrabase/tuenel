@@ -4,3 +4,8 @@ version.workspace = true
 edition.workspace = true
 license.workspace = true
 rust-version.workspace = true
+
+[dependencies]
+gateway-providers = { path = "../gateway-providers" }
+gateway-types = { path = "../gateway-types" }
+thiserror.workspace = true

@@ -4,3 +4,28 @@ version.workspace = true
 edition.workspace = true
 license.workspace = true
 rust-version.workspace = true
+
+[dependencies]
+argon2.workspace = true
+async-trait.workspace = true
+aws-lc-rs.workspace = true
+base64.workspace = true
+chrono.workspace = true
+gateway-keys = { path = "../gateway-keys" }
+gateway-store = { path = "../gateway-store" }
+gateway-types = { path = "../gateway-types" }
+jsonwebtoken.workspace = true
+rand.workspace = true
+reqwest.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+sha2.workspace = true
+thiserror.workspace = true
+tokio.workspace = true
+uuid.workspace = true
+
+[dev-dependencies]
+axum.workspace = true
+base64.workspace = true
+store-memory = { path = "../../stores/store-memory" }
+uuid.workspace = true

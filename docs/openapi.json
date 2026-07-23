@@ -1,0 +1,1498 @@
+{
+  "openapi": "3.1.0",
+  "info": {
+    "title": "gateway-server",
+    "description": "",
+    "license": {
+      "name": "Apache-2.0",
+      "identifier": "Apache-2.0"
+    },
+    "version": "0.3.0"
+  },
+  "paths": {
+    "/admin/approvals": {
+      "get": {
+        "responses": {
+          "200": {
+            "description": "Success"
+          },
+          "401": {
+            "description": "Authentication required"
+          },
+          "403": {
+            "description": "Not authorized"
+          }
+        }
+      }
+    },
+    "/admin/approvals/{approval_id}": {
+      "get": {
+        "responses": {
+          "200": {
+            "description": "Success"
+          },
+          "401": {
+            "description": "Authentication required"
+          },
+          "403": {
+            "description": "Not authorized"
+          }
+        }
+      }
+    },
+    "/admin/approvals/{approval_id}/approve": {
+      "post": {
+        "responses": {
+          "200": {
+            "description": "Success"
+          },
+          "401": {
+            "description": "Authentication required"
+          },
+          "403": {
+            "description": "Not authorized"
+          }
+        }
+      }
+    },
+    "/admin/approvals/{approval_id}/reject": {
+      "post": {
+        "responses": {
+          "200": {
+            "description": "Success"
+          },
+          "401": {
+            "description": "Authentication required"
+          },
+          "403": {
+            "description": "Not authorized"
+          }
+        }
+      }
+    },
+    "/admin/mcp/policies": {
+      "get": {
+        "responses": {
+          "200": {
+            "description": "Success"
+          },
+          "401": {
+            "description": "Authentication required"
+          },
+          "403": {
+            "description": "Not authorized"
+          }
+        }
+      },
+      "post": {
+        "responses": {
+          "200": {
+            "description": "Success"
+          },
+          "401": {
+            "description": "Authentication required"
+          },
+          "403": {
+            "description": "Not authorized"
+          }
+        }
+      }
+    },
+    "/admin/mcp/policies/{policy_id}": {
+      "delete": {
+        "responses": {
+          "200": {
+            "description": "Success"
+          },
+          "401": {
+            "description": "Authentication required"
+          },
+          "403": {
+            "description": "Not authorized"
+          }
+        }
+      },
+      "patch": {
+        "responses": {
+          "200": {
+            "description": "Success"
+          },
+          "401": {
+            "description": "Authentication required"
+          },
+          "403": {
+            "description": "Not authorized"
+          }
+        }
+      }
+    },
+    "/admin/mcp/servers": {
+      "get": {
+        "responses": {
+          "200": {
+            "description": "Success"
+          },
+          "401": {
+            "description": "Authentication required"
+          },
+          "403": {
+            "description": "Not authorized"
+          }
+        }
+      },
+      "post": {
+        "responses": {
+          "200": {
+            "description": "Success"
+          },
+          "401": {
+            "description": "Authentication required"
+          },
+          "403": {
+            "description": "Not authorized"
+          }
+        }
+      }
+    },
+    "/admin/mcp/servers/{server_id}": {
+      "get": {
+        "responses": {
+          "200": {
+            "description": "Success"
+          },
+          "401": {
+            "description": "Authentication required"
+          },
+          "403": {
+            "description": "Not authorized"
+          }
+        }
+      },
+      "delete": {
+        "responses": {
+          "200": {
+            "description": "Success"
+          },
+          "401": {
+            "description": "Authentication required"
+          },
+          "403": {
+            "description": "Not authorized"
+          }
+        }
+      },
+      "patch": {
+        "responses": {
+          "200": {
+            "description": "Success"
+          },
+          "401": {
+            "description": "Authentication required"
+          },
+          "403": {
+            "description": "Not authorized"
+          }
+        }
+      }
+    },
+    "/admin/mcp/servers/{server_id}/health": {
+      "post": {
+        "responses": {
+          "200": {
+            "description": "Success"
+          },
+          "401": {
+            "description": "Authentication required"
+          },
+          "403": {
+            "description": "Not authorized"
+          }
+        }
+      }
+    },
+    "/admin/mcp/servers/{server_id}/refresh": {
+      "post": {
+        "responses": {
+          "200": {
+            "description": "Success"
+          },
+          "401": {
+            "description": "Authentication required"
+          },
+          "403": {
+            "description": "Not authorized"
+          }
+        }
+      }
+    },
+    "/admin/mcp/servers/{server_id}/tools": {
+      "get": {
+        "responses": {
+          "200": {
+            "description": "Success"
+          },
+          "401": {
+            "description": "Authentication required"
+          },
+          "403": {
+            "description": "Not authorized"
+          }
+        }
+      }
+    },
+    "/admin/mcp/tools": {
+      "get": {
+        "responses": {
+          "200": {
+            "description": "Success"
+          },
+          "401": {
+            "description": "Authentication required"
+          },
+          "403": {
+            "description": "Not authorized"
+          }
+        }
+      }
+    },
+    "/admin/security/events": {
+      "get": {
+        "responses": {
+          "200": {
+            "description": "Success"
+          },
+          "401": {
+            "description": "Authentication required"
+          },
+          "403": {
+            "description": "Not authorized"
+          }
+        }
+      }
+    },
+    "/admin/security/findings": {
+      "get": {
+        "responses": {
+          "200": {
+            "description": "Success"
+          },
+          "401": {
+            "description": "Authentication required"
+          },
+          "403": {
+            "description": "Not authorized"
+          }
+        }
+      }
+    },
+    "/admin/security/incidents": {
+      "get": {
+        "responses": {
+          "200": {
+            "description": "Success"
+          },
+          "401": {
+            "description": "Authentication required"
+          },
+          "403": {
+            "description": "Not authorized"
+          }
+        }
+      }
+    },
+    "/admin/security/incidents/{incident_id}": {
+      "get": {
+        "responses": {
+          "200": {
+            "description": "Success"
+          },
+          "401": {
+            "description": "Authentication required"
+          },
+          "403": {
+            "description": "Not authorized"
+          }
+        }
+      },
+      "patch": {
+        "responses": {
+          "200": {
+            "description": "Success"
+          },
+          "401": {
+            "description": "Authentication required"
+          },
+          "403": {
+            "description": "Not authorized"
+          }
+        }
+      }
+    },
+    "/admin/security/policies": {
+      "get": {
+        "responses": {
+          "200": {
+            "description": "Success"
+          },
+          "401": {
+            "description": "Authentication required"
+          },
+          "403": {
+            "description": "Not authorized"
+          }
+        }
+      },
+      "post": {
+        "responses": {
+          "200": {
+            "description": "Success"
+          },
+          "401": {
+            "description": "Authentication required"
+          },
+          "403": {
+            "description": "Not authorized"
+          }
+        }
+      }
+    },
+    "/admin/security/policies/{policy_id}": {
+      "delete": {
+        "responses": {
+          "200": {
+            "description": "Success"
+          },
+          "401": {
+            "description": "Authentication required"
+          },
+          "403": {
+            "description": "Not authorized"
+          }
+        }
+      },
+      "patch": {
+        "responses": {
+          "200": {
+            "description": "Success"
+          },
+          "401": {
+            "description": "Authentication required"
+          },
+          "403": {
+            "description": "Not authorized"
+          }
+        }
+      }
+    },
+    "/admin/virtual-keys": {
+      "post": {
+        "tags": [],
+        "operationId": "create_virtual_key",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CreateVirtualKeyRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "201": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CreateVirtualKeyResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/admin/virtual-keys/{id}": {
+      "delete": {
+        "tags": [],
+        "operationId": "revoke_virtual_key",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": ""
+          },
+          "401": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/health": {
+      "get": {
+        "tags": [],
+        "operationId": "health",
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/StatusResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/mcp": {
+      "get": {
+        "responses": {
+          "200": {
+            "description": "Success"
+          },
+          "401": {
+            "description": "Authentication required"
+          },
+          "403": {
+            "description": "Not authorized"
+          }
+        }
+      },
+      "post": {
+        "responses": {
+          "200": {
+            "description": "Success"
+          },
+          "401": {
+            "description": "Authentication required"
+          },
+          "403": {
+            "description": "Not authorized"
+          }
+        }
+      },
+      "delete": {
+        "responses": {
+          "200": {
+            "description": "Success"
+          },
+          "401": {
+            "description": "Authentication required"
+          },
+          "403": {
+            "description": "Not authorized"
+          }
+        }
+      }
+    },
+    "/ready": {
+      "get": {
+        "tags": [],
+        "operationId": "ready",
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/StatusResponse"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/chat/completions": {
+      "post": {
+        "tags": [],
+        "operationId": "chat_completions",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ChatCompletionRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ChatCompletionResponse"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/embeddings": {
+      "post": {
+        "tags": [],
+        "operationId": "embeddings",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/EmbeddingsRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/EmbeddingsResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/gateway/approvals/{approval_id}": {
+      "get": {
+        "responses": {
+          "200": {
+            "description": "Success"
+          },
+          "401": {
+            "description": "Authentication required"
+          },
+          "403": {
+            "description": "Not authorized"
+          }
+        }
+      }
+    },
+    "/v1/mcp/servers": {
+      "get": {
+        "responses": {
+          "200": {
+            "description": "Success"
+          },
+          "401": {
+            "description": "Authentication required"
+          },
+          "403": {
+            "description": "Not authorized"
+          }
+        }
+      }
+    },
+    "/v1/mcp/tools": {
+      "get": {
+        "responses": {
+          "200": {
+            "description": "Success"
+          },
+          "401": {
+            "description": "Authentication required"
+          },
+          "403": {
+            "description": "Not authorized"
+          }
+        }
+      }
+    },
+    "/v1/mcp/tools/call": {
+      "post": {
+        "responses": {
+          "200": {
+            "description": "Success"
+          },
+          "401": {
+            "description": "Authentication required"
+          },
+          "403": {
+            "description": "Not authorized"
+          }
+        }
+      }
+    },
+    "/v1/models": {
+      "get": {
+        "tags": [],
+        "operationId": "models",
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ModelList"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/responses": {
+      "post": {
+        "tags": [],
+        "operationId": "responses",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ResponsesRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ResponsesResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          }
+        }
+      }
+    }
+  },
+  "components": {
+    "schemas": {
+      "ChatCompletionRequest": {
+        "type": "object",
+        "description": "OpenAI-compatible chat-completions request supported by v0.1.",
+        "required": [
+          "model",
+          "messages"
+        ],
+        "properties": {
+          "max_completion_tokens": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int32",
+            "description": "Current output-token limit.",
+            "minimum": 0
+          },
+          "max_tokens": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int32",
+            "description": "Legacy output-token limit.",
+            "minimum": 0
+          },
+          "messages": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/ChatMessage"
+            },
+            "description": "Ordered text-only messages."
+          },
+          "model": {
+            "type": "string",
+            "description": "Public model alias."
+          },
+          "n": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int32",
+            "description": "v0.1 supports exactly one choice.",
+            "minimum": 0
+          },
+          "response_format": {
+            "type": [
+              "object",
+              "null"
+            ],
+            "description": "Unsupported in v0.1 and rejected when present."
+          },
+          "stop": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/StopInput",
+                "description": "Stop sequence or sequences."
+              }
+            ]
+          },
+          "stream": {
+            "type": "boolean",
+            "description": "Enable SSE streaming."
+          },
+          "stream_options": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/StreamOptions",
+                "description": "Streaming response options."
+              }
+            ]
+          },
+          "temperature": {
+            "type": [
+              "number",
+              "null"
+            ],
+            "format": "float",
+            "description": "Sampling temperature."
+          },
+          "tool_choice": {
+            "type": [
+              "object",
+              "null"
+            ],
+            "description": "Unsupported in v0.1 and rejected when present."
+          },
+          "tools": {
+            "type": [
+              "object",
+              "null"
+            ],
+            "description": "Unsupported in v0.1 and rejected when present."
+          },
+          "top_p": {
+            "type": [
+              "number",
+              "null"
+            ],
+            "format": "float",
+            "description": "Nucleus sampling threshold."
+          }
+        }
+      },
+      "ChatCompletionResponse": {
+        "type": "object",
+        "description": "Non-streaming OpenAI chat completion response.",
+        "required": [
+          "id",
+          "object",
+          "created",
+          "model",
+          "choices",
+          "usage"
+        ],
+        "properties": {
+          "choices": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/CompletionChoice"
+            },
+            "description": "Completion choices."
+          },
+          "created": {
+            "type": "integer",
+            "format": "int64",
+            "description": "Unix creation timestamp."
+          },
+          "id": {
+            "type": "string",
+            "description": "Completion identifier."
+          },
+          "model": {
+            "type": "string",
+            "description": "Public model alias."
+          },
+          "object": {
+            "type": "string",
+            "description": "Object discriminator."
+          },
+          "usage": {
+            "$ref": "#/components/schemas/UsageResponse",
+            "description": "Token usage."
+          }
+        }
+      },
+      "ChatMessage": {
+        "type": "object",
+        "description": "OpenAI text message DTO.",
+        "required": [
+          "role",
+          "content"
+        ],
+        "properties": {
+          "content": {
+            "type": "string",
+            "description": "Text content."
+          },
+          "role": {
+            "$ref": "#/components/schemas/MessageRoleDto",
+            "description": "Message role."
+          }
+        }
+      },
+      "CompletionChoice": {
+        "type": "object",
+        "description": "Completion choice DTO.",
+        "required": [
+          "index",
+          "message"
+        ],
+        "properties": {
+          "finish_reason": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Provider finish reason."
+          },
+          "index": {
+            "type": "integer",
+            "format": "int32",
+            "description": "Choice index.",
+            "minimum": 0
+          },
+          "message": {
+            "$ref": "#/components/schemas/ResponseMessage",
+            "description": "Assistant message."
+          }
+        }
+      },
+      "CreateVirtualKeyRequest": {
+        "type": "object",
+        "description": "Tenant-scoped Virtual Key issuance request.",
+        "properties": {
+          "daily_token_limit": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int64",
+            "description": "Daily token limit, or the configured default.",
+            "minimum": 0
+          },
+          "expires_at": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "date-time",
+            "description": "Optional expiration time."
+          },
+          "project_id": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Optional project binding."
+          },
+          "scopes": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "Granted scopes."
+          },
+          "user_id": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Optional user binding."
+          }
+        }
+      },
+      "CreateVirtualKeyResponse": {
+        "type": "object",
+        "description": "One-time Virtual Key issuance response.",
+        "required": [
+          "id",
+          "key",
+          "key_prefix",
+          "daily_token_limit"
+        ],
+        "properties": {
+          "daily_token_limit": {
+            "type": "integer",
+            "format": "int64",
+            "description": "Daily token limit.",
+            "minimum": 0
+          },
+          "expires_at": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "date-time",
+            "description": "Optional expiration."
+          },
+          "id": {
+            "type": "string",
+            "format": "uuid",
+            "description": "Key identifier."
+          },
+          "key": {
+            "type": "string",
+            "description": "Plaintext bearer key, returned only once."
+          },
+          "key_prefix": {
+            "type": "string",
+            "description": "Non-secret lookup prefix."
+          }
+        }
+      },
+      "EmbeddingData": {
+        "type": "object",
+        "required": [
+          "object",
+          "index",
+          "embedding"
+        ],
+        "properties": {
+          "embedding": {
+            "type": "array",
+            "items": {
+              "type": "number",
+              "format": "float"
+            }
+          },
+          "index": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "object": {
+            "type": "string"
+          }
+        }
+      },
+      "EmbeddingsInput": {
+        "oneOf": [
+          {
+            "type": "string"
+          },
+          {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          }
+        ]
+      },
+      "EmbeddingsRequest": {
+        "type": "object",
+        "description": "OpenAI embeddings request.",
+        "required": [
+          "model",
+          "input"
+        ],
+        "properties": {
+          "dimensions": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int32",
+            "minimum": 0
+          },
+          "input": {
+            "$ref": "#/components/schemas/EmbeddingsInput"
+          },
+          "model": {
+            "type": "string"
+          }
+        }
+      },
+      "EmbeddingsResponse": {
+        "type": "object",
+        "required": [
+          "object",
+          "data",
+          "model",
+          "usage"
+        ],
+        "properties": {
+          "data": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/EmbeddingData"
+            }
+          },
+          "model": {
+            "type": "string"
+          },
+          "object": {
+            "type": "string"
+          },
+          "usage": {
+            "$ref": "#/components/schemas/UsageResponse"
+          }
+        }
+      },
+      "ErrorEnvelope": {
+        "type": "object",
+        "description": "OpenAI error envelope.",
+        "required": [
+          "error"
+        ],
+        "properties": {
+          "error": {
+            "$ref": "#/components/schemas/ErrorObject",
+            "description": "Error details."
+          }
+        }
+      },
+      "ErrorObject": {
+        "type": "object",
+        "description": "OpenAI error details.",
+        "required": [
+          "message",
+          "type",
+          "code"
+        ],
+        "properties": {
+          "code": {
+            "type": "string",
+            "description": "Stable machine-readable code."
+          },
+          "message": {
+            "type": "string",
+            "description": "Safe client-facing message."
+          },
+          "param": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Related request parameter."
+          },
+          "type": {
+            "type": "string",
+            "description": "OpenAI-compatible category."
+          }
+        }
+      },
+      "MessageRoleDto": {
+        "type": "string",
+        "description": "Supported OpenAI message roles.",
+        "enum": [
+          "system",
+          "user",
+          "assistant"
+        ]
+      },
+      "ModelList": {
+        "type": "object",
+        "description": "OpenAI model list.",
+        "required": [
+          "object",
+          "data"
+        ],
+        "properties": {
+          "data": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/ModelObject"
+            },
+            "description": "Available public models."
+          },
+          "object": {
+            "type": "string",
+            "description": "Always `list`."
+          }
+        }
+      },
+      "ModelObject": {
+        "type": "object",
+        "description": "OpenAI model descriptor.",
+        "required": [
+          "id",
+          "object",
+          "created",
+          "owned_by"
+        ],
+        "properties": {
+          "created": {
+            "type": "integer",
+            "format": "int64",
+            "description": "Creation timestamp; zero for configured aliases."
+          },
+          "id": {
+            "type": "string",
+            "description": "Public alias."
+          },
+          "object": {
+            "type": "string",
+            "description": "Always `model`."
+          },
+          "owned_by": {
+            "type": "string",
+            "description": "Gateway owner label."
+          }
+        }
+      },
+      "ResponseMessage": {
+        "type": "object",
+        "description": "Assistant response message DTO.",
+        "required": [
+          "role",
+          "content"
+        ],
+        "properties": {
+          "content": {
+            "type": "string",
+            "description": "Generated text."
+          },
+          "role": {
+            "type": "string",
+            "description": "Always `assistant`."
+          }
+        }
+      },
+      "ResponsesInput": {
+        "oneOf": [
+          {
+            "type": "string"
+          },
+          {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/ChatMessage"
+            }
+          }
+        ]
+      },
+      "ResponsesOutput": {
+        "type": "object",
+        "required": [
+          "type",
+          "role",
+          "content"
+        ],
+        "properties": {
+          "content": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/ResponsesOutputText"
+            }
+          },
+          "role": {
+            "type": "string"
+          },
+          "type": {
+            "type": "string"
+          }
+        }
+      },
+      "ResponsesOutputText": {
+        "type": "object",
+        "required": [
+          "type",
+          "text"
+        ],
+        "properties": {
+          "text": {
+            "type": "string"
+          },
+          "type": {
+            "type": "string"
+          }
+        }
+      },
+      "ResponsesRequest": {
+        "type": "object",
+        "description": "OpenAI Responses API request. Provider-specific fields are normalized before core execution.",
+        "required": [
+          "model",
+          "input"
+        ],
+        "properties": {
+          "input": {
+            "$ref": "#/components/schemas/ResponsesInput"
+          },
+          "instructions": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "max_output_tokens": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int32",
+            "minimum": 0
+          },
+          "model": {
+            "type": "string"
+          },
+          "stream": {
+            "type": "boolean"
+          },
+          "temperature": {
+            "type": [
+              "number",
+              "null"
+            ],
+            "format": "float"
+          },
+          "top_p": {
+            "type": [
+              "number",
+              "null"
+            ],
+            "format": "float"
+          }
+        }
+      },
+      "ResponsesResponse": {
+        "type": "object",
+        "required": [
+          "id",
+          "object",
+          "model",
+          "output",
+          "usage"
+        ],
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "model": {
+            "type": "string"
+          },
+          "object": {
+            "type": "string"
+          },
+          "output": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/ResponsesOutput"
+            }
+          },
+          "usage": {
+            "$ref": "#/components/schemas/UsageResponse"
+          }
+        }
+      },
+      "StatusResponse": {
+        "type": "object",
+        "required": [
+          "status"
+        ],
+        "properties": {
+          "status": {
+            "type": "string"
+          }
+        }
+      },
+      "StopInput": {
+        "oneOf": [
+          {
+            "type": "string",
+            "description": "One sequence."
+          },
+          {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "Multiple sequences."
+          }
+        ],
+        "description": "One stop sequence or a list of sequences."
+      },
+      "StreamOptions": {
+        "type": "object",
+        "description": "OpenAI stream options supported by v0.1.",
+        "properties": {
+          "include_usage": {
+            "type": "boolean",
+            "description": "Emit a final usage chunk."
+          }
+        }
+      },
+      "UsageResponse": {
+        "type": "object",
+        "description": "OpenAI token usage DTO.",
+        "required": [
+          "prompt_tokens",
+          "completion_tokens",
+          "total_tokens"
+        ],
+        "properties": {
+          "completion_tokens": {
+            "type": "integer",
+            "format": "int64",
+            "description": "Output tokens.",
+            "minimum": 0
+          },
+          "prompt_tokens": {
+            "type": "integer",
+            "format": "int64",
+            "description": "Input tokens.",
+            "minimum": 0
+          },
+          "total_tokens": {
+            "type": "integer",
+            "format": "int64",
+            "description": "Total tokens.",
+            "minimum": 0
+          }
+        }
+      }
+    }
+  },
+  "tags": [
+    {
+      "name": "gateway",
+      "description": "Tuenel Gateway v0.3"
+    }
+  ]
+}

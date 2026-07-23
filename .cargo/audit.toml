@@ -1,0 +1,4 @@
+[advisories]
+# jsonwebtoken lists rsa behind its disabled rust_crypto feature. The gateway
+# enables only aws_lc_rs; `cargo tree --target all -i rsa` is empty.
+ignore = ["RUSTSEC-2023-0071"]

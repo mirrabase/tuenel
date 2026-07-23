@@ -1,0 +1,27 @@
+[package]
+name = "store-postgres"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+
+[dependencies]
+async-trait.workspace = true
+chrono.workspace = true
+gateway-approval = { path = "../../crates/gateway-approval" }
+gateway-auth = { path = "../../crates/gateway-auth" }
+gateway-billing = { path = "../../crates/gateway-billing" }
+gateway-incidents = { path = "../../crates/gateway-incidents" }
+gateway-events = { path = "../../crates/gateway-events" }
+gateway-mcp = { path = "../../crates/gateway-mcp" }
+gateway-policy = { path = "../../crates/gateway-policy" }
+gateway-pricing = { path = "../../crates/gateway-pricing" }
+gateway-providers = { path = "../../crates/gateway-providers" }
+gateway-secrets = { path = "../../crates/gateway-secrets" }
+gateway-security = { path = "../../crates/gateway-security" }
+gateway-store = { path = "../../crates/gateway-store" }
+gateway-types = { path = "../../crates/gateway-types" }
+serde_json.workspace = true
+rust_decimal.workspace = true
+sqlx.workspace = true
+uuid.workspace = true

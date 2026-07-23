@@ -1,0 +1,18 @@
+[package]
+name = "security-prompt-injection"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+
+[dependencies]
+async-trait.workspace = true
+gateway-security = { path = "../../crates/gateway-security" }
+gateway-types = { path = "../../crates/gateway-types" }
+regex.workspace = true
+security-regex = { path = "../security-regex" }
+serde_json.workspace = true
+uuid.workspace = true
+
+[dev-dependencies]
+tokio.workspace = true
