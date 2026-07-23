@@ -16,6 +16,7 @@ gateway-routing = { path = "../gateway-routing" }
 gateway-security = { path = "../gateway-security" }
 gateway-types = { path = "../gateway-types" }
 serde_json.workspace = true
+serde.workspace = true
 thiserror.workspace = true
 tokio.workspace = true
 tokio-stream.workspace = true

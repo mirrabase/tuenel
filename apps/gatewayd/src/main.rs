@@ -5,7 +5,7 @@ use gateway_approval::{ApprovalRepository, ApprovalService};
 use gateway_auth::{AuthService, IdentityRepository, JwtAuthenticator, WebAuthService};
 use gateway_billing::{BillingRepository, BillingWorker};
 use gateway_config::Settings;
-use gateway_core::GatewayService;
+use gateway_core::{GatewayRuntime, GatewayService};
 use gateway_events::{AuditRepository, AuditService};
 use gateway_incidents::{IncidentRepository, IncidentService};
 use gateway_keys::VirtualKeyService;
@@ -25,11 +25,11 @@ use gateway_secrets::{SecretRepository, SecretService};
 use gateway_security::{SecurityEnforcer, SecurityInspector, SecurityPipeline, SecurityRepository};
 use gateway_server::AppState;
 use gateway_store::GatewayStore;
-use gateway_types::{McpTransportType, TokenUsage, UsageEvent, UsageStatus};
+use gateway_types::{McpTransportType, SecretRef, TokenUsage, UsageEvent, UsageStatus};
 use provider_anthropic::AnthropicProvider;
 use provider_gemini::GeminiProvider;
 use provider_openai_compatible::OpenAiCompatibleProvider;
-use secrecy::ExposeSecret;
+use secrecy::{ExposeSecret, SecretString};
 use store_postgres::PostgresStore;
 use tokio::signal;
 use uuid::Uuid;
@@ -146,6 +146,40 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
             enabled: true,
         });
     }
+    for provider in &providers {
+        let id = provider.id();
+        let (provider_type, base_url) = match id {
+            "anthropic" => ("anthropic", settings.anthropic_base_url.as_str()),
+            "gemini" => ("gemini", settings.gemini_base_url.as_str()),
+            _ => ("openai_compatible", settings.upstream_base_url.as_str()),
+        };
+        postgres
+            .bootstrap_runtime_resource(
+                gateway_admin::ResourceKind::Providers,
+                id,
+                serde_json::json!({
+                    "provider_type":provider_type,
+                    "base_url":base_url,
+                    "environment_credential":true
+                }),
+            )
+            .await?;
+    }
+    for target in &targets {
+        postgres
+            .bootstrap_runtime_resource(
+                gateway_admin::ResourceKind::ModelRoutes,
+                &format!("{}:{}", target.requested_model, target.provider),
+                serde_json::json!({
+                    "provider":target.provider,
+                    "requested_model":target.requested_model,
+                    "upstream_model":target.upstream_model,
+                    "priority":target.priority,
+                    "enabled":target.enabled
+                }),
+            )
+            .await?;
+    }
     let provider_registry = ProviderRegistry::new(providers);
     tokio::spawn(
         ProviderHealthMonitor::new(
@@ -174,25 +208,35 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
         incidents.clone(),
     )
     .with_enabled(settings.security_enabled);
-    let gateway = Arc::new(
+    let gateway = GatewayRuntime::new(
         GatewayService::configured(
             router,
             RoutePlan::new(targets)?,
             provider_registry,
-            policy,
-            quota,
+            policy.clone(),
+            quota.clone(),
             metering.clone(),
             settings.request_timeout,
         )?
         .with_security(security_enforcer.clone()),
     );
-    tokio::spawn(reconcile_expired(store.clone(), metering));
+    tokio::spawn(reconcile_expired(store.clone(), metering.clone()));
 
     let secret_repository: Arc<dyn SecretRepository> = postgres.clone();
     let secrets = SecretService::new(
         secret_repository.clone(),
         settings.credentials_master_key.expose_secret(),
     )?;
+    tokio::spawn(reconcile_runtime(
+        postgres.clone(),
+        gateway.clone(),
+        settings.clone(),
+        secrets.clone(),
+        policy.clone(),
+        quota.clone(),
+        metering.clone(),
+        security_enforcer.clone(),
+    ));
     let billing = BillingWorker::new(
         postgres.clone() as Arc<dyn BillingRepository>,
         secrets.clone(),
@@ -246,7 +290,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
         gateway,
         keys,
         store,
-        admin_role: settings.oidc_admin_role,
+        admin_role: settings.oidc_admin_role.clone(),
         max_output_tokens: settings.max_output_tokens,
         default_output_tokens: settings.default_output_tokens,
         default_virtual_key_daily_tokens: settings.default_virtual_key_daily_tokens,
@@ -255,11 +299,18 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
         mcp_invocations,
         mcp_policies: Some(postgres.clone() as Arc<dyn McpPolicyRepository>),
         mcp_policy_admin: Some(postgres.clone() as Arc<dyn McpPolicyAdministration>),
-        secrets: Some(secrets),
+        secrets: Some(secrets.clone()),
         approvals: settings.approval_enabled.then_some(approvals),
         incidents: Some(incidents),
         security_repository: Some(security_repository),
         audit: Some(audit),
+        admin: Some(
+            gateway_admin::AdminService::new(
+                postgres.clone() as Arc<dyn gateway_admin::AdminRepository>,
+                settings.oidc_admin_role.clone(),
+            )
+            .with_secrets(secrets),
+        ),
     });
     let listener = tokio::net::TcpListener::bind(settings.bind_addr).await?;
     tracing::info!(address = %settings.bind_addr, "gateway listening");
@@ -369,6 +420,179 @@ impl McpTransportResolver for TransportResolver {
             },
         ))
     }
+}
+
+#[allow(clippy::too_many_arguments)]
+async fn reconcile_runtime(
+    postgres: Arc<PostgresStore>,
+    runtime: GatewayRuntime,
+    settings: Settings,
+    secrets: SecretService,
+    policy: Arc<dyn PolicyResolver>,
+    quota: QuotaService,
+    metering: MeteringService,
+    security: SecurityEnforcer,
+) {
+    let mut interval = tokio::time::interval(Duration::from_secs(5));
+    loop {
+        interval.tick().await;
+        match build_runtime(
+            &postgres,
+            &settings,
+            &secrets,
+            policy.clone(),
+            quota.clone(),
+            metering.clone(),
+            security.clone(),
+        )
+        .await
+        {
+            Ok(candidate) => runtime.replace(candidate),
+            Err(error) => {
+                tracing::warn!(reason = %error, "runtime configuration reconciliation failed");
+                runtime.reconciliation_failed(error);
+            }
+        }
+    }
+}
+
+#[allow(clippy::too_many_arguments)]
+async fn build_runtime(
+    postgres: &PostgresStore,
+    settings: &Settings,
+    secrets: &SecretService,
+    policy: Arc<dyn PolicyResolver>,
+    quota: QuotaService,
+    metering: MeteringService,
+    security: SecurityEnforcer,
+) -> Result<GatewayService, String> {
+    let resources = postgres
+        .runtime_resources()
+        .await
+        .map_err(|_| "configuration repository unavailable".to_owned())?;
+    let mut providers: Vec<Arc<dyn ModelProvider>> = Vec::new();
+    let mut targets = Vec::new();
+    for resource in resources {
+        match resource.kind.as_str() {
+            "providers" => {
+                let provider_type = text(&resource.body, "provider_type")?;
+                let base_url: url::Url = text(&resource.body, "base_url")?
+                    .parse()
+                    .map_err(|_| "invalid provider base URL".to_owned())?;
+                let credential =
+                    runtime_credential(&resource.id, &resource.body, settings, secrets).await?;
+                let provider: Arc<dyn ModelProvider> = match provider_type {
+                    "anthropic" => Arc::new(
+                        AnthropicProvider::new(
+                            resource.id,
+                            base_url,
+                            credential
+                                .ok_or_else(|| "anthropic credential is missing".to_owned())?,
+                            settings.request_timeout,
+                        )
+                        .map_err(|error| error.to_string())?,
+                    ),
+                    "gemini" => Arc::new(
+                        GeminiProvider::new(
+                            resource.id,
+                            base_url,
+                            credential.ok_or_else(|| "gemini credential is missing".to_owned())?,
+                            settings.request_timeout,
+                        )
+                        .map_err(|error| error.to_string())?,
+                    ),
+                    "openai_compatible" => Arc::new(
+                        OpenAiCompatibleProvider::new(
+                            resource.id,
+                            base_url,
+                            credential,
+                            settings.request_timeout,
+                        )
+                        .map_err(|error| error.to_string())?,
+                    ),
+                    _ => return Err("unsupported provider type".into()),
+                };
+                providers.push(provider);
+            }
+            "model_routes" => {
+                let priority = resource
+                    .body
+                    .get("priority")
+                    .and_then(serde_json::Value::as_u64)
+                    .and_then(|value| value.try_into().ok())
+                    .ok_or_else(|| "invalid route priority".to_owned())?;
+                targets.push(RouteTarget {
+                    provider: text(&resource.body, "provider")?.to_owned(),
+                    requested_model: text(&resource.body, "requested_model")?.to_owned(),
+                    upstream_model: text(&resource.body, "upstream_model")?.to_owned(),
+                    priority,
+                    enabled: resource
+                        .body
+                        .get("enabled")
+                        .and_then(serde_json::Value::as_bool)
+                        .unwrap_or(true),
+                });
+            }
+            _ => {}
+        }
+    }
+    targets.sort_by_key(|target| target.priority);
+    let first = targets
+        .iter()
+        .find(|target| target.enabled)
+        .cloned()
+        .ok_or_else(|| "no enabled model route".to_owned())?;
+    let registry = ProviderRegistry::new(providers);
+    if targets
+        .iter()
+        .filter(|target| target.enabled)
+        .any(|target| registry.get(&target.provider).is_none())
+    {
+        return Err("route references an unavailable provider".into());
+    }
+    GatewayService::configured(
+        StaticRouter::new(first.provider, first.requested_model, first.upstream_model),
+        RoutePlan::new(targets).map_err(|error| error.to_string())?,
+        registry,
+        policy,
+        quota,
+        metering,
+        settings.request_timeout,
+    )
+    .map(|gateway| gateway.with_security(security))
+    .map_err(|error| error.to_string())
+}
+
+async fn runtime_credential(
+    provider_id: &str,
+    body: &serde_json::Value,
+    settings: &Settings,
+    secrets: &SecretService,
+) -> Result<Option<SecretString>, String> {
+    if let Some(secret_ref) = body.get("secret_ref").and_then(serde_json::Value::as_str) {
+        let tenant_id = text(body, "secret_tenant_id")?;
+        let value = secrets
+            .expose(tenant_id, &SecretRef(secret_ref.to_owned()))
+            .await
+            .map_err(|_| "provider credential is unavailable".to_owned())?;
+        return String::from_utf8(value.expose().to_vec())
+            .map(SecretString::from)
+            .map(Some)
+            .map_err(|_| "provider credential is invalid".to_owned());
+    }
+    Ok(match provider_id {
+        "anthropic" => settings.anthropic_api_key.clone(),
+        "gemini" => settings.gemini_api_key.clone(),
+        "openai-compatible" => settings.upstream_api_key.clone(),
+        _ => None,
+    })
+}
+
+fn text<'a>(body: &'a serde_json::Value, field: &str) -> Result<&'a str, String> {
+    body.get(field)
+        .and_then(serde_json::Value::as_str)
+        .filter(|value| !value.is_empty())
+        .ok_or_else(|| format!("missing {field}"))
 }
 
 async fn reconcile_expired(store: Arc<dyn GatewayStore>, metering: MeteringService) {

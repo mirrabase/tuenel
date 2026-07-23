@@ -1,5 +1,6 @@
 //! Axum transport for the OpenAI-compatible v0.1 API.
 
+mod admin;
 mod v03;
 
 use std::{convert::Infallible, sync::Arc, time::Instant};
@@ -17,7 +18,7 @@ use axum::{
 use chrono::{DateTime, Utc};
 use futures::StreamExt;
 use gateway_auth::{AuthError, Authenticator, LoginResult, Signup, WebAuthError, WebAuthService};
-use gateway_core::{GatewayError, GatewayService};
+use gateway_core::{GatewayError, GatewayRuntime};
 use gateway_keys::VirtualKeyService;
 use gateway_quota::QuotaError;
 use gateway_store::GatewayStore;
@@ -42,7 +43,7 @@ pub struct AppState {
     /// Gateway-owned browser identity and session service.
     pub web_auth: Option<WebAuthService>,
     /// Inference application service.
-    pub gateway: Arc<GatewayService>,
+    pub gateway: GatewayRuntime,
     /// Virtual Key lifecycle service.
     pub keys: VirtualKeyService,
     /// Store used for readiness checks.
@@ -75,6 +76,8 @@ pub struct AppState {
     pub security_repository: Option<Arc<dyn gateway_security::SecurityRepository>>,
     /// Append-only audit event service.
     pub audit: Option<gateway_events::AuditService>,
+    /// PostgreSQL-backed control-plane administration.
+    pub admin: Option<gateway_admin::AdminService>,
 }
 
 /// Build the complete HTTP router.
@@ -99,6 +102,7 @@ pub fn router(state: AppState) -> Router {
         .route("/v1/embeddings", post(embeddings))
         .route("/admin/virtual-keys", post(create_virtual_key))
         .route("/admin/virtual-keys/{id}", delete(revoke_virtual_key))
+        .merge(admin::routes())
         .merge(v03::routes())
         .layer(RequestBodyLimitLayer::new(body_limit))
         .layer(middleware::from_fn(request_context))
@@ -120,8 +124,8 @@ pub fn openapi_document() -> utoipa::openapi::OpenApi {
     serde_json::from_value(value).expect("generated OpenAPI is valid")
 }
 
-fn v03_openapi_paths() -> [(&'static str, &'static [&'static str]); 23] {
-    [
+fn v03_openapi_paths() -> Vec<(&'static str, &'static [&'static str])> {
+    vec![
         ("/admin/mcp/servers", &["get", "post"]),
         (
             "/admin/mcp/servers/{server_id}",
@@ -131,6 +135,10 @@ fn v03_openapi_paths() -> [(&'static str, &'static [&'static str]); 23] {
         ("/admin/mcp/servers/{server_id}/health", &["post"]),
         ("/admin/mcp/servers/{server_id}/tools", &["get"]),
         ("/admin/mcp/tools", &["get"]),
+        (
+            "/admin/mcp/tools/{server_id}/{tool_name}/annotations",
+            &["patch"],
+        ),
         ("/admin/mcp/policies", &["get", "post"]),
         ("/admin/mcp/policies/{policy_id}", &["patch", "delete"]),
         ("/v1/mcp/servers", &["get"]),
@@ -142,12 +150,46 @@ fn v03_openapi_paths() -> [(&'static str, &'static [&'static str]); 23] {
         ("/admin/approvals/{approval_id}/approve", &["post"]),
         ("/admin/approvals/{approval_id}/reject", &["post"]),
         ("/v1/gateway/approvals/{approval_id}", &["get"]),
+        ("/v1/gateway/approvals", &["get"]),
         ("/admin/security/policies", &["get", "post"]),
         ("/admin/security/policies/{policy_id}", &["patch", "delete"]),
         ("/admin/security/incidents", &["get"]),
         ("/admin/security/incidents/{incident_id}", &["get", "patch"]),
         ("/admin/security/findings", &["get"]),
         ("/admin/security/events", &["get"]),
+        ("/admin/security/patterns", &["get", "post"]),
+        (
+            "/admin/security/patterns/{pattern_id}",
+            &["patch", "delete"],
+        ),
+        ("/admin/security/incidents/{incident_id}/timeline", &["get"]),
+        ("/admin/tenants", &["get"]),
+        ("/admin/projects", &["get", "post"]),
+        ("/admin/projects/{id}", &["patch", "delete"]),
+        ("/auth/tenants/{tenant_id}/members", &["get"]),
+        ("/admin/virtual-keys", &["get", "post"]),
+        ("/admin/providers", &["get", "post"]),
+        ("/admin/providers/{id}", &["patch", "delete"]),
+        ("/admin/providers/{id}/check", &["post"]),
+        ("/admin/model-routes", &["get", "post"]),
+        ("/admin/model-routes/{id}", &["patch", "delete"]),
+        ("/admin/model-prices", &["get", "post"]),
+        ("/admin/model-prices/{id}", &["patch", "delete"]),
+        ("/admin/policies", &["get", "post"]),
+        ("/admin/policies/{id}", &["patch", "delete"]),
+        ("/admin/quota-limits", &["get", "post"]),
+        ("/admin/quota-limits/{id}", &["patch", "delete"]),
+        ("/admin/usage/summary", &["get"]),
+        ("/admin/usage/series", &["get"]),
+        ("/admin/usage/events", &["get"]),
+        ("/admin/usage/reservations", &["get"]),
+        ("/admin/usage/mcp-invocations", &["get"]),
+        ("/admin/audit-events", &["get"]),
+        ("/admin/summary", &["get"]),
+        ("/admin/system", &["get"]),
+        ("/admin/billing/webhooks", &["get"]),
+        ("/admin/billing/outbox", &["get"]),
+        ("/admin/billing/outbox/{event_id}/retry", &["post"]),
     ]
 }
 
@@ -260,6 +302,7 @@ async fn session(
     Ok(Json(json!({
         "user_id": session.user_id,
         "email": session.email,
+        "gateway_admin": session.gateway_admin,
         "expires_at": session.expires_at,
         "memberships": session.memberships,
     })))
@@ -347,7 +390,7 @@ async fn models(
     Ok(Json(ModelList {
         object: "list",
         data: vec![ModelObject {
-            id: route.requested_model.clone(),
+            id: route.requested_model,
             object: "model",
             created: 0,
             owned_by: "tuenel",
@@ -460,7 +503,7 @@ async fn create_virtual_key(
     headers: HeaderMap,
     Json(input): Json<CreateVirtualKeyRequest>,
 ) -> Result<(StatusCode, Json<CreateVirtualKeyResponse>), ApiError> {
-    let principal = admin_principal(&state, &headers).await?;
+    let principal = write_admin_principal(&state, &headers).await?;
     let daily_token_limit = input
         .daily_token_limit
         .unwrap_or(state.default_virtual_key_daily_tokens);
@@ -507,7 +550,7 @@ async fn revoke_virtual_key(
     Path(id): Path<Uuid>,
     headers: HeaderMap,
 ) -> Result<StatusCode, ApiError> {
-    let principal = admin_principal(&state, &headers).await?;
+    let principal = write_admin_principal(&state, &headers).await?;
     if state
         .keys
         .revoke(&principal.tenant_id, id)
@@ -553,6 +596,19 @@ async fn admin_principal(state: &AppState, headers: &HeaderMap) -> Result<Princi
         return Err(ApiError::forbidden("administrator role required"));
     }
     Ok(principal)
+}
+
+async fn write_admin_principal(
+    state: &AppState,
+    headers: &HeaderMap,
+) -> Result<Principal, ApiError> {
+    let principal = admin_principal(state, headers).await?;
+    principal
+        .roles
+        .iter()
+        .any(|role| role == &state.admin_role || matches!(role.as_str(), "owner" | "admin"))
+        .then_some(principal)
+        .ok_or_else(|| ApiError::forbidden("administrator write role required"))
 }
 
 async fn inference_principal(state: &AppState, headers: &HeaderMap) -> Result<Principal, ApiError> {

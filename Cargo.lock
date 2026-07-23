@@ -815,6 +815,16 @@ dependencies = [
 [[package]]
 name = "gateway-admin"
 version = "0.3.0"
+dependencies = [
+ "async-trait",
+ "gateway-secrets",
+ "gateway-types",
+ "serde",
+ "serde_json",
+ "thiserror 2.0.19",
+ "url",
+ "uuid",
+]
 
 [[package]]
 name = "gateway-approval"
@@ -898,6 +908,7 @@ dependencies = [
  "gateway-routing",
  "gateway-security",
  "gateway-types",
+ "serde",
  "serde_json",
  "thiserror 2.0.19",
  "tokio",
@@ -925,6 +936,7 @@ dependencies = [
  "async-trait",
  "chrono",
  "gateway-types",
+ "serde",
  "thiserror 2.0.19",
  "tokio",
  "uuid",
@@ -1002,6 +1014,7 @@ version = "0.3.0"
 dependencies = [
  "async-trait",
  "gateway-types",
+ "serde",
  "thiserror 2.0.19",
 ]
 
@@ -1092,6 +1105,7 @@ dependencies = [
  "axum 0.8.9",
  "chrono",
  "futures",
+ "gateway-admin",
  "gateway-approval",
  "gateway-auth",
  "gateway-core",
@@ -1154,6 +1168,7 @@ dependencies = [
  "async-trait",
  "axum 0.8.9",
  "chrono",
+ "gateway-admin",
  "gateway-approval",
  "gateway-auth",
  "gateway-billing",
@@ -1190,6 +1205,7 @@ dependencies = [
  "store-redis",
  "tokio",
  "tracing",
+ "url",
  "uuid",
 ]
 
@@ -3171,6 +3187,7 @@ version = "0.3.0"
 dependencies = [
  "async-trait",
  "chrono",
+ "gateway-admin",
  "gateway-approval",
  "gateway-auth",
  "gateway-billing",
@@ -3185,6 +3202,7 @@ dependencies = [
  "gateway-store",
  "gateway-types",
  "rust_decimal",
+ "serde",
  "serde_json",
  "sqlx",
  "uuid",

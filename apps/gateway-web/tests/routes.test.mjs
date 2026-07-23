@@ -38,20 +38,17 @@ test("every console route has a page", () => {
 test("browser credentials are never persisted in script-readable storage", () => {
   const files = [
     "components/console-shell.tsx",
+    "components/gateway-provider.tsx",
     "components/pages/workspace-pages.tsx",
+    "components/pages/platform-pages.tsx",
     "components/pages/mcp-pages.tsx",
     "components/pages/security-pages.tsx",
-    "lib/mock-store.ts",
+    "lib/gateway-api.ts",
   ]
   const source = files
     .map((file) => readFileSync(join(root, file), "utf8"))
     .join("\n")
   assert.equal(/localStorage|sessionStorage/.test(source), false)
+  assert.equal(/mock-store|mock-data|MockProvider|useMockGateway/.test(source), false)
   assert.match(source, /fetch\s*\(|gatewayFetch/)
-})
-
-test("fixtures contain no complete production-shaped virtual key", () => {
-  const source = readFileSync(join(root, "lib/mock-data.ts"), "utf8")
-  assert.equal(/vk_live_[a-zA-Z0-9]{20,}/.test(source), false)
-  assert.match(source, /••••/)
 })

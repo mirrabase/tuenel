@@ -15,7 +15,7 @@ export default function ErrorPage({ reset }: { reset: () => void }) {
       <EmptyHeader>
         <EmptyTitle>Something went wrong</EmptyTitle>
         <EmptyDescription>
-          The mock console could not render this page.
+          The gateway console could not render this page.
         </EmptyDescription>
       </EmptyHeader>
       <EmptyContent>

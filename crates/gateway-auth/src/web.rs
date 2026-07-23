@@ -68,6 +68,7 @@ pub struct LoginResult {
 pub struct SessionInfo {
     pub user_id: Uuid,
     pub email: String,
+    pub gateway_admin: bool,
     pub expires_at: DateTime<Utc>,
     pub memberships: Vec<Membership>,
 }
@@ -232,6 +233,7 @@ impl WebAuthService {
         Ok(SessionInfo {
             user_id: user.id,
             email: user.email,
+            gateway_admin: user.gateway_admin,
             expires_at,
             memberships: self.repository.memberships(user.id).await?,
         })

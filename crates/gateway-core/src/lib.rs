@@ -2,11 +2,11 @@
 
 use std::{
     pin::Pin,
-    sync::Arc,
+    sync::{Arc, RwLock},
     time::{Duration, Instant},
 };
 
-use chrono::Utc;
+use chrono::{DateTime, Utc};
 use futures::{Stream, StreamExt};
 use gateway_metering::MeteringService;
 use gateway_policy::{AllowAllPolicyResolver, PolicyError, PolicyResolver};
@@ -23,6 +23,130 @@ use thiserror::Error;
 use tokio::{sync::mpsc, time::timeout};
 use tokio_stream::wrappers::ReceiverStream;
 use uuid::Uuid;
+
+/// Atomically replaceable immutable inference configuration.
+#[derive(Clone)]
+pub struct GatewayRuntime {
+    current: Arc<RwLock<Arc<GatewayService>>>,
+    status: Arc<RwLock<RuntimeStatus>>,
+}
+
+#[derive(Clone, Debug, serde::Serialize)]
+pub struct RuntimeStatus {
+    pub state: &'static str,
+    pub pending: bool,
+    pub error: Option<String>,
+    pub reconciled_at: DateTime<Utc>,
+}
+
+impl GatewayRuntime {
+    pub fn new(service: GatewayService) -> Self {
+        Self {
+            current: Arc::new(RwLock::new(Arc::new(service))),
+            status: Arc::new(RwLock::new(RuntimeStatus {
+                state: "active",
+                pending: false,
+                error: None,
+                reconciled_at: Utc::now(),
+            })),
+        }
+    }
+
+    pub fn replace(&self, service: GatewayService) {
+        *self
+            .current
+            .write()
+            .unwrap_or_else(|error| error.into_inner()) = Arc::new(service);
+        *self
+            .status
+            .write()
+            .unwrap_or_else(|error| error.into_inner()) = RuntimeStatus {
+            state: "active",
+            pending: false,
+            error: None,
+            reconciled_at: Utc::now(),
+        };
+    }
+
+    pub fn reconciliation_failed(&self, message: impl Into<String>) {
+        *self
+            .status
+            .write()
+            .unwrap_or_else(|error| error.into_inner()) = RuntimeStatus {
+            state: "degraded",
+            pending: true,
+            error: Some(message.into()),
+            reconciled_at: Utc::now(),
+        };
+    }
+
+    pub fn status(&self) -> RuntimeStatus {
+        self.status
+            .read()
+            .unwrap_or_else(|error| error.into_inner())
+            .clone()
+    }
+
+    pub fn model_route(&self) -> ModelRoute {
+        self.service().model_route().clone()
+    }
+
+    pub async fn execute(
+        &self,
+        request_id: Uuid,
+        principal: Principal,
+        request: GatewayRequest,
+    ) -> Result<GatewayResponse, GatewayError> {
+        self.service().execute(request_id, principal, request).await
+    }
+
+    pub async fn stream(
+        &self,
+        request_id: Uuid,
+        principal: Principal,
+        request: GatewayRequest,
+    ) -> Result<GatewayResultStream, GatewayError> {
+        self.service().stream(request_id, principal, request).await
+    }
+
+    pub async fn execute_inference(
+        &self,
+        request_id: Uuid,
+        principal: Principal,
+        request: GatewayInferenceRequest,
+    ) -> Result<GatewayResponse, GatewayError> {
+        self.service()
+            .execute_inference(request_id, principal, request)
+            .await
+    }
+
+    pub async fn stream_inference(
+        &self,
+        request_id: Uuid,
+        principal: Principal,
+        request: GatewayInferenceRequest,
+    ) -> Result<GatewayResultStream, GatewayError> {
+        self.service()
+            .stream_inference(request_id, principal, request)
+            .await
+    }
+
+    pub async fn embed(
+        &self,
+        request_id: Uuid,
+        principal: Principal,
+        request: GatewayEmbeddingRequest,
+    ) -> Result<GatewayEmbeddingResponse, GatewayError> {
+        self.service().embed(request_id, principal, request).await
+    }
+
+    fn service(&self) -> Arc<GatewayService> {
+        self.current
+            .read()
+            .unwrap_or_else(|error| error.into_inner())
+            .clone()
+    }
+}
 
 /// Stream returned by the application service.
 pub type GatewayResultStream =

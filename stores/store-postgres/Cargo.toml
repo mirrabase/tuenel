@@ -9,6 +9,7 @@ rust-version.workspace = true
 async-trait.workspace = true
 chrono.workspace = true
 gateway-approval = { path = "../../crates/gateway-approval" }
+gateway-admin = { path = "../../crates/gateway-admin" }
 gateway-auth = { path = "../../crates/gateway-auth" }
 gateway-billing = { path = "../../crates/gateway-billing" }
 gateway-incidents = { path = "../../crates/gateway-incidents" }
@@ -22,6 +23,7 @@ gateway-security = { path = "../../crates/gateway-security" }
 gateway-store = { path = "../../crates/gateway-store" }
 gateway-types = { path = "../../crates/gateway-types" }
 serde_json.workspace = true
+serde.workspace = true
 rust_decimal.workspace = true
 sqlx.workspace = true
 uuid.workspace = true

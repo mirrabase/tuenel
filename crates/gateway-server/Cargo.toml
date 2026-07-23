@@ -11,6 +11,7 @@ axum.workspace = true
 chrono.workspace = true
 futures.workspace = true
 gateway-auth = { path = "../gateway-auth" }
+gateway-admin = { path = "../gateway-admin" }
 gateway-approval = { path = "../gateway-approval" }
 gateway-core = { path = "../gateway-core" }
 gateway-events = { path = "../gateway-events" }

@@ -1,7 +1,7 @@
 import { notFound, redirect } from "next/navigation"
 
 import { ConsoleShell } from "@/components/console-shell"
-import { MockProvider } from "@/components/mock-provider"
+import { GatewayProvider } from "@/components/gateway-provider"
 import { isLocale } from "@/lib/locales"
 import { getSession } from "@/lib/server-auth"
 
@@ -22,15 +22,16 @@ export default async function TenantLayout({
   )
   if (!membership) notFound()
   return (
-    <MockProvider
+    <GatewayProvider
       session={{
         email: session.email,
         tenantId,
         tenantName: membership.tenant_name,
-        role: membership.role,
+        tenantRole: membership.role,
+        gatewayAdmin: session.gateway_admin,
       }}
     >
       <ConsoleShell scoped>{children}</ConsoleShell>
-    </MockProvider>
+    </GatewayProvider>
   )
 }

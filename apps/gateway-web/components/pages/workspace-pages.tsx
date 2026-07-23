@@ -1,81 +1,30 @@
 "use client"
 
 import * as React from "react"
+import { CopyIcon, PlayIcon, StopIcon, TrashIcon } from "@phosphor-icons/react"
 import { toast } from "sonner"
-import {
-  ClipboardIcon,
-  KeyIcon,
-  LockKeyIcon,
-  PaperPlaneTiltIcon,
-  TrashIcon,
-  WarningCircleIcon,
-} from "@phosphor-icons/react"
 
-import { useMockGateway } from "@/components/mock-provider"
+import { useGateway } from "@/components/gateway-provider"
 import {
-  BackendNotice,
+  DataState,
   Metric,
   PageHeader,
-  StateVariants,
   StatusBadge,
+  useGatewayData,
 } from "@/components/pages/shared"
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert"
-import {
-  AlertDialog,
-  AlertDialogAction,
-  AlertDialogCancel,
-  AlertDialogContent,
-  AlertDialogDescription,
-  AlertDialogFooter,
-  AlertDialogHeader,
-  AlertDialogTitle,
-  AlertDialogTrigger,
-} from "@/components/ui/alert-dialog"
 import { Badge } from "@/components/ui/badge"
-import { Bubble, BubbleContent } from "@/components/ui/bubble"
 import { Button } from "@/components/ui/button"
 import {
   Card,
-  CardAction,
   CardContent,
   CardDescription,
   CardHeader,
   CardTitle,
 } from "@/components/ui/card"
-import {
-  Dialog,
-  DialogClose,
-  DialogContent,
-  DialogDescription,
-  DialogFooter,
-  DialogHeader,
-  DialogTitle,
-  DialogTrigger,
-} from "@/components/ui/dialog"
 import { Field, FieldGroup, FieldLabel } from "@/components/ui/field"
 import { Input } from "@/components/ui/input"
-import {
-  Message,
-  MessageContent,
-  MessageFooter,
-  MessageHeader,
-} from "@/components/ui/message"
-import {
-  MessageScroller,
-  MessageScrollerButton,
-  MessageScrollerContent,
-  MessageScrollerItem,
-  MessageScrollerProvider,
-  MessageScrollerViewport,
-} from "@/components/ui/message-scroller"
-import {
-  Select,
-  SelectContent,
-  SelectGroup,
-  SelectItem,
-  SelectTrigger,
-  SelectValue,
-} from "@/components/ui/select"
+import { Spinner } from "@/components/ui/spinner"
 import {
   Table,
   TableBody,
@@ -84,557 +33,504 @@ import {
   TableHeader,
   TableRow,
 } from "@/components/ui/table"
-import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs"
+import { Tabs, TabsList, TabsTrigger } from "@/components/ui/tabs"
 import { Textarea } from "@/components/ui/textarea"
-import { gatewayFetch } from "@/lib/gateway-api"
-import { usageEvents } from "@/lib/mock-data"
+import {
+  type Page,
+  gatewayFetch,
+  gatewayResponse,
+  readSse,
+} from "@/lib/gateway-api"
+
+type JsonRecord = Record<string, unknown>
 
 export function OverviewPage({ operator = false }: { operator?: boolean }) {
+  const path = operator ? "/admin/summary" : "/admin/usage/summary"
+  const state = useGatewayData<JsonRecord>(path)
+  const usage = (state.data?.usage ?? state.data ?? {}) as JsonRecord
   return (
     <>
       <PageHeader
-        title={operator ? "Fleet overview" : "Workspace overview"}
-        description="Deterministic Gateway v0.3 operational snapshot; every value on this page is mock data."
+        title={operator ? "Gateway overview" : "Workspace overview"}
+        description="A current snapshot from the gateway control plane."
       />
-      <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
-        <Metric
-          label="Requests · 24h"
-          value={operator ? "50.8k" : "24.8k"}
-          detail="Simulated traffic"
-        />
-        <Metric
-          label="Success rate"
-          value="99.72%"
-          detail="Simulated provider outcomes"
-        />
-        <Metric
-          label="Token quota"
-          value="68%"
-          detail="Mock reservation counters"
-        />
-        <Metric
-          label="Estimated cost"
-          value="$318.20"
-          detail="Mock pricing snapshot"
-        />
-      </div>
-      <Card className="mt-4">
-        <CardHeader>
-          <CardTitle>Recent requests</CardTitle>
-          <CardDescription>Sanitized mock usage events.</CardDescription>
-        </CardHeader>
-        <CardContent>
-          <UsageTable />
-        </CardContent>
-      </Card>
-    </>
-  )
-}
-
-function UsageTable() {
-  return (
-    <Table>
-      <TableHeader>
-        <TableRow>
-          <TableHead>Request</TableHead>
-          <TableHead>Model</TableHead>
-          <TableHead>Status</TableHead>
-          <TableHead>Tokens</TableHead>
-          <TableHead>Cost</TableHead>
-        </TableRow>
-      </TableHeader>
-      <TableBody>
-        {usageEvents.map((row) => (
-          <TableRow key={row.id}>
-            <TableCell className="font-mono">{row.id}</TableCell>
-            <TableCell>{row.model}</TableCell>
-            <TableCell>
-              <StatusBadge status={row.status} />
-            </TableCell>
-            <TableCell>{row.tokens.toLocaleString()}</TableCell>
-            <TableCell>{row.cost}</TableCell>
-          </TableRow>
-        ))}
-      </TableBody>
-    </Table>
-  )
-}
-
-const scenarioItems = ["safe", "warn", "redact", "block"] as const
-export function PlaygroundPage() {
-  const { state } = useMockGateway()
-  const [surface, setSurface] = React.useState("chat")
-  const [scenario, setScenario] =
-    React.useState<(typeof scenarioItems)[number]>("safe")
-  const [prompt, setPrompt] = React.useState(
-    "Explain why an AI gateway is useful."
-  )
-  const [answer, setAnswer] = React.useState("")
-  const [running, setRunning] = React.useState(false)
-  const run = async () => {
-    if (!prompt.trim()) return
-    setRunning(true)
-    setAnswer("")
-    try {
-      const tenant = state.principal!.tenantId
-      if (surface === "embeddings") {
-        const result = await gatewayFetch<{
-          data: Array<{ embedding: number[] }>
-        }>("/v1/embeddings", tenant, {
-          method: "POST",
-          headers: { "content-type": "application/json" },
-          body: JSON.stringify({ model: "gateway-default", input: prompt }),
-        })
-        setAnswer(JSON.stringify(result.data[0]?.embedding ?? []))
-      } else if (surface === "responses") {
-        const result = await gatewayFetch<{
-          output: Array<{ content: Array<{ text: string }> }>
-        }>("/v1/responses", tenant, {
-          method: "POST",
-          headers: { "content-type": "application/json" },
-          body: JSON.stringify({
-            model: "gateway-default",
-            input: prompt,
-            stream: false,
-          }),
-        })
-        setAnswer(result.output?.[0]?.content?.[0]?.text ?? "")
-      } else {
-        const result = await gatewayFetch<{
-          choices: Array<{ message: { content: string } }>
-        }>("/v1/chat/completions", tenant, {
-          method: "POST",
-          headers: { "content-type": "application/json" },
-          body: JSON.stringify({
-            model: "gateway-default",
-            messages: [{ role: "user", content: prompt }],
-            stream: false,
-          }),
-        })
-        setAnswer(result.choices?.[0]?.message?.content ?? "")
-      }
-    } catch (error) {
-      setAnswer(
-        error instanceof Error ? error.message : "Gateway request failed"
-      )
-    } finally {
-      setRunning(false)
-    }
-  }
-  const payload =
-    surface === "responses"
-      ? { model: "gateway-default", input: prompt, stream: true }
-      : surface === "embeddings"
-        ? { model: "text-embedding-demo", input: prompt }
-        : {
-            model: "gateway-default",
-            messages: [{ role: "user", content: prompt }],
-            stream: true,
-          }
-  return (
-    <>
-      <PageHeader
-        title="Playground"
-        description="Run Chat Completions, Responses, and Embeddings through the authenticated gateway."
-      />
-      <BackendNotice />
-      <Tabs value={surface} onValueChange={setSurface} className="mt-4">
-        <TabsList>
-          <TabsTrigger value="chat">Chat Completions</TabsTrigger>
-          <TabsTrigger value="responses">Responses</TabsTrigger>
-          <TabsTrigger value="embeddings">Embeddings</TabsTrigger>
-        </TabsList>
-        <TabsContent value={surface} className="pt-3">
-          <div className="grid gap-4 xl:grid-cols-[minmax(0,1fr)_360px]">
-            <Card>
-              <CardHeader>
-                <CardTitle>Messages</CardTitle>
-                <CardDescription>
-                  Streaming and inspection are simulated locally.
-                </CardDescription>
-              </CardHeader>
-              <CardContent className="flex h-[480px] flex-col gap-3">
-                <MessageScrollerProvider autoScroll>
-                  <MessageScroller>
-                    <MessageScrollerViewport>
-                      <MessageScrollerContent>
-                        <MessageScrollerItem messageId="user" scrollAnchor>
-                          <Message align="end">
-                            <MessageContent>
-                              <MessageHeader>You</MessageHeader>
-                              <Bubble align="end">
-                                <BubbleContent>{prompt}</BubbleContent>
-                              </Bubble>
-                            </MessageContent>
-                          </Message>
-                        </MessageScrollerItem>
-                        {answer && (
-                          <MessageScrollerItem messageId="assistant">
-                            <Message>
-                              <MessageContent>
-                                <MessageHeader>Gateway mock</MessageHeader>
-                                <Bubble
-                                  variant={
-                                    scenario === "block"
-                                      ? "destructive"
-                                      : "muted"
-                                  }
-                                >
-                                  <BubbleContent>
-                                    <pre className="font-sans whitespace-pre-wrap">
-                                      {answer}
-                                    </pre>
-                                  </BubbleContent>
-                                </Bubble>
-                                <MessageFooter>
-                                  82 tokens · 842ms · {scenario}
-                                </MessageFooter>
-                              </MessageContent>
-                            </Message>
-                          </MessageScrollerItem>
-                        )}
-                      </MessageScrollerContent>
-                    </MessageScrollerViewport>
-                    <MessageScrollerButton />
-                  </MessageScroller>
-                </MessageScrollerProvider>
-                <Textarea
-                  value={prompt}
-                  onChange={(event) => setPrompt(event.target.value)}
-                  aria-label="Prompt"
-                />
-                <Button onClick={run} disabled={running || !prompt.trim()}>
-                  <PaperPlaneTiltIcon data-icon="inline-start" />
-                  {running ? "Running…" : "Run request"}
-                </Button>
-              </CardContent>
-            </Card>
-            <div className="flex flex-col gap-4">
-              <Card>
-                <CardHeader>
-                  <CardTitle>Request</CardTitle>
-                  <CardDescription>
-                    OpenAI-compatible mock payload
-                  </CardDescription>
-                </CardHeader>
-                <CardContent>
-                  <pre className="overflow-x-auto rounded-md bg-muted p-3 text-xs">
-                    {JSON.stringify(payload, null, 2)}
-                  </pre>
-                </CardContent>
-              </Card>
-              <Card>
-                <CardHeader>
-                  <CardTitle>Inspection scenario</CardTitle>
-                </CardHeader>
-                <CardContent>
-                  <Select
-                    items={scenarioItems.map((value) => ({
-                      label: value,
-                      value,
-                    }))}
-                    value={scenario}
-                    onValueChange={(value) =>
-                      value && setScenario(value as typeof scenario)
-                    }
-                  >
-                    <SelectTrigger className="w-full">
-                      <SelectValue />
-                    </SelectTrigger>
-                    <SelectContent>
-                      <SelectGroup>
-                        {scenarioItems.map((value) => (
-                          <SelectItem key={value} value={value}>
-                            {value}
-                          </SelectItem>
-                        ))}
-                      </SelectGroup>
-                    </SelectContent>
-                  </Select>
-                  <div className="mt-3 flex flex-wrap gap-1">
-                    <Badge variant="outline">request inspection</Badge>
-                    <Badge variant="outline">response inspection</Badge>
-                    <Badge variant="outline">usage envelope</Badge>
-                  </div>
-                </CardContent>
-              </Card>
-            </div>
-          </div>
-        </TabsContent>
-      </Tabs>
+      <DataState
+        loading={state.loading}
+        error={state.error}
+        onRetry={state.reload}
+      >
+        <div className="grid gap-4 md:grid-cols-3">
+          <Metric
+            label="Requests"
+            value={String(usage.requests ?? 0)}
+            detail="Persisted usage events"
+          />
+          <Metric
+            label="Tokens"
+            value={String(usage.tokens ?? usage.total_tokens ?? 0)}
+            detail="Input and output tokens"
+          />
+          <Metric
+            label="Estimated cost"
+            value={`$${usage.cost ?? usage.estimated_cost ?? 0}`}
+            detail="Based on active model pricing"
+          />
+        </div>
+      </DataState>
     </>
   )
 }
 
 export function ModelsPage() {
-  const { state } = useMockGateway()
-  const [items, setItems] = React.useState<
-    Array<{ id: string; owned_by: string }>
-  >([])
-  const [error, setError] = React.useState<string>()
-  React.useEffect(() => {
-    gatewayFetch<{ data: Array<{ id: string; owned_by: string }> }>(
-      "/v1/models",
-      state.principal!.tenantId
-    )
-      .then((result) => setItems(result.data))
-      .catch((value) =>
-        setError(
-          value instanceof Error ? value.message : "Gateway request failed"
-        )
-      )
-  }, [state.principal])
+  const state = useGatewayData<{ data: { id: string; owned_by: string }[] }>(
+    "/v1/models"
+  )
   return (
     <>
       <PageHeader
         title="Models"
-        description="Stable model aliases available to the current tenant."
+        description="Public model aliases currently exposed by the live gateway."
       />
-      {error ? (
-        <Alert variant="destructive">
-          <WarningCircleIcon />
-          <AlertDescription>{error}</AlertDescription>
-        </Alert>
-      ) : (
-        <div className="grid gap-4 lg:grid-cols-3">
-          {items.map((model) => (
-            <Card key={model.id}>
-              <CardHeader>
-                <CardTitle>{model.id}</CardTitle>
-                <CardDescription>{model.owned_by}</CardDescription>
-                <CardAction>
-                  <StatusBadge status="available" />
-                </CardAction>
-              </CardHeader>
-              <CardContent className="flex flex-col gap-2">
-                <span className="text-muted-foreground">
-                  Provider-neutral gateway alias
-                </span>
-              </CardContent>
-            </Card>
-          ))}
-        </div>
-      )}
+      <DataState
+        loading={state.loading}
+        error={state.error}
+        empty={state.data?.data.length === 0}
+        onRetry={state.reload}
+      >
+        <Card>
+          <CardContent>
+            <Table>
+              <TableHeader>
+                <TableRow>
+                  <TableHead>Alias</TableHead>
+                  <TableHead>Owner</TableHead>
+                  <TableHead>Status</TableHead>
+                </TableRow>
+              </TableHeader>
+              <TableBody>
+                {state.data?.data.map((model) => (
+                  <TableRow key={model.id}>
+                    <TableCell>{model.id}</TableCell>
+                    <TableCell>{model.owned_by}</TableCell>
+                    <TableCell>
+                      <StatusBadge status="Available" />
+                    </TableCell>
+                  </TableRow>
+                ))}
+              </TableBody>
+            </Table>
+          </CardContent>
+        </Card>
+      </DataState>
     </>
   )
 }
 
-export function KeysPage() {
-  const { state } = useMockGateway()
-  const [open, setOpen] = React.useState(false)
-  const [revealedSecret, setRevealedSecret] = React.useState<string | null>(
-    null
-  )
-  const [keys, setKeys] = React.useState<
-    Array<{
-      id: string
-      name: string
-      prefix: string
-      quota: string
-      status: "Active" | "Revoked"
-    }>
-  >([])
+export function PlaygroundPage() {
+  const { tenantId } = useGateway()
+  const [operation, setOperation] = React.useState("chat")
+  const [model, setModel] = React.useState("")
+  const [input, setInput] = React.useState("")
+  const [output, setOutput] = React.useState("")
+  const [running, setRunning] = React.useState(false)
+  const controller = React.useRef<AbortController>(null)
+  const models = useGatewayData<{ data: { id: string }[] }>("/v1/models")
+
+  const selectedModel = model || models.data?.data[0]?.id || ""
+
+  async function run() {
+    controller.current?.abort()
+    const abort = new AbortController()
+    controller.current = abort
+    setRunning(true)
+    setOutput("")
+    try {
+      if (operation === "embeddings") {
+        const value = await gatewayFetch<JsonRecord>(
+          "/v1/embeddings",
+          tenantId,
+          {
+            method: "POST",
+            headers: { "content-type": "application/json" },
+            body: JSON.stringify({ model: selectedModel, input }),
+            signal: abort.signal,
+          }
+        )
+        setOutput(JSON.stringify(value, null, 2))
+        return
+      }
+      const responses = operation === "responses"
+      const response = await gatewayResponse(
+        responses ? "/v1/responses" : "/v1/chat/completions",
+        tenantId,
+        {
+          method: "POST",
+          headers: {
+            "content-type": "application/json",
+            accept: "text/event-stream",
+          },
+          body: JSON.stringify(
+            responses
+              ? { model: selectedModel, input, stream: true }
+              : {
+                  model: selectedModel,
+                  messages: [{ role: "user", content: input }],
+                  stream: true,
+                }
+          ),
+          signal: abort.signal,
+        }
+      )
+      await readSse(
+        response,
+        (event) => {
+          const value = event as JsonRecord
+          const choices = value.choices as
+            { delta?: { content?: string } }[] | undefined
+          const delta =
+            choices?.[0]?.delta?.content ??
+            (value.type === "response.output_text.delta" ? value.delta : "")
+          if (typeof delta === "string") setOutput((current) => current + delta)
+        },
+        abort.signal
+      )
+    } catch (error) {
+      if (!abort.signal.aborted)
+        toast.error(error instanceof Error ? error.message : "Request failed")
+    } finally {
+      setRunning(false)
+      controller.current = null
+    }
+  }
+
   return (
     <>
       <PageHeader
-        title="Virtual Keys"
-        description="Tenant-scoped Virtual Keys. Plaintext is returned once and retained only in memory."
-        action={
-          <Dialog
-            open={open}
-            onOpenChange={(value) => {
-              setOpen(value)
-              if (!value) setRevealedSecret(null)
-            }}
-          >
-            <DialogTrigger render={<Button />}>
-              <KeyIcon data-icon="inline-start" />
-              Issue key
-            </DialogTrigger>
-            <DialogContent>
-              <DialogHeader>
-                <DialogTitle>
-                  {revealedSecret ? "Copy key" : "Issue Virtual Key"}
-                </DialogTitle>
-                <DialogDescription>
-                  Store it now. The plaintext will not be shown again.
-                </DialogDescription>
-              </DialogHeader>
-              {revealedSecret ? (
-                <>
-                  <Alert>
-                    <LockKeyIcon />
-                    <AlertTitle>Shown once</AlertTitle>
-                    <AlertDescription>{revealedSecret}</AlertDescription>
-                  </Alert>
-                  <Button
-                    variant="outline"
-                    onClick={() =>
-                      navigator.clipboard
-                        .writeText(revealedSecret)
-                        .then(() => toast.success("Key copied"))
-                    }
-                  >
-                    <ClipboardIcon data-icon="inline-start" />
-                    Copy demo key
-                  </Button>
-                </>
-              ) : (
-                <form
-                  onSubmit={async (event) => {
-                    event.preventDefault()
-                    const form = new FormData(event.currentTarget)
-                    try {
-                      const expiry = String(form.get("expiry") ?? "")
-                      const result = await gatewayFetch<{
-                        id: string
-                        key: string
-                        key_prefix: string
-                        daily_token_limit: number
-                      }>("/admin/virtual-keys", state.principal!.tenantId, {
-                        method: "POST",
-                        headers: { "content-type": "application/json" },
-                        body: JSON.stringify({
-                          scopes: ["chat", "responses", "embeddings"],
-                          expires_at: expiry
-                            ? new Date(expiry).toISOString()
-                            : null,
-                        }),
-                      })
-                      setRevealedSecret(result.key)
-                      setKeys((items) => [
-                        ...items,
-                        {
-                          id: result.id,
-                          name: String(form.get("name")),
-                          prefix: result.key_prefix,
-                          quota: String(result.daily_token_limit),
-                          status: "Active",
-                        },
-                      ])
-                    } catch (error) {
-                      toast.error(
-                        error instanceof Error
-                          ? error.message
-                          : "Key issuance failed"
-                      )
-                    }
-                  }}
-                >
-                  <FieldGroup>
-                    <Field>
-                      <FieldLabel htmlFor="key-name">Name</FieldLabel>
-                      <Input
-                        id="key-name"
-                        name="name"
-                        required
-                        defaultValue="New integration"
-                      />
-                    </Field>
-                    <Field>
-                      <FieldLabel htmlFor="key-expiry">Expiry</FieldLabel>
-                      <Input
-                        id="key-expiry"
-                        name="expiry"
-                        type="datetime-local"
-                      />
-                    </Field>
-                  </FieldGroup>
-                  <DialogFooter className="mt-4">
-                    <DialogClose render={<Button variant="outline" />}>
-                      Cancel
-                    </DialogClose>
-                    <Button type="submit">Issue key</Button>
-                  </DialogFooter>
-                </form>
-              )}
-            </DialogContent>
-          </Dialog>
-        }
+        title="Playground"
+        description="Send abortable streaming inference and embedding requests."
       />
-      <Card>
+      <div className="grid gap-4 lg:grid-cols-2">
+        <Card>
+          <CardHeader>
+            <CardTitle>Request</CardTitle>
+            <CardDescription>
+              Plaintext input remains in this tab only.
+            </CardDescription>
+          </CardHeader>
+          <CardContent>
+            <FieldGroup>
+              <Field>
+                <FieldLabel>Operation</FieldLabel>
+                <Tabs value={operation} onValueChange={setOperation}>
+                  <TabsList>
+                    <TabsTrigger value="chat">Chat</TabsTrigger>
+                    <TabsTrigger value="responses">Responses</TabsTrigger>
+                    <TabsTrigger value="embeddings">Embeddings</TabsTrigger>
+                  </TabsList>
+                </Tabs>
+              </Field>
+              <Field>
+                <FieldLabel htmlFor="playground-model">Model</FieldLabel>
+                <Input
+                  id="playground-model"
+                  value={selectedModel}
+                  onChange={(event) => setModel(event.target.value)}
+                  required
+                />
+              </Field>
+              <Field>
+                <FieldLabel htmlFor="playground-input">Input</FieldLabel>
+                <Textarea
+                  id="playground-input"
+                  value={input}
+                  onChange={(event) => setInput(event.target.value)}
+                  rows={10}
+                />
+              </Field>
+              <div className="flex gap-2">
+                <Button
+                  disabled={running || !selectedModel || !input}
+                  onClick={run}
+                >
+                  {running ? (
+                    <Spinner data-icon="inline-start" />
+                  ) : (
+                    <PlayIcon data-icon="inline-start" />
+                  )}
+                  Run
+                </Button>
+                <Button
+                  variant="outline"
+                  disabled={!running}
+                  onClick={() => controller.current?.abort()}
+                >
+                  <StopIcon data-icon="inline-start" />
+                  Stop
+                </Button>
+              </div>
+            </FieldGroup>
+          </CardContent>
+        </Card>
+        <Card>
+          <CardHeader>
+            <CardTitle>Response</CardTitle>
+            <CardDescription>
+              Direct gateway output without fabricated usage.
+            </CardDescription>
+          </CardHeader>
+          <CardContent>
+            <pre className="min-h-64 overflow-auto rounded-md bg-muted p-4 text-sm whitespace-pre-wrap">
+              {output || "Run a request to see the response."}
+            </pre>
+          </CardContent>
+        </Card>
+      </div>
+    </>
+  )
+}
+
+type VirtualKey = {
+  id: string
+  display_name?: string
+  key_prefix: string
+  scopes: string[]
+  revoked_at?: string
+  expires_at?: string
+}
+
+export function KeysPage() {
+  const { tenantId } = useGateway()
+  const state = useGatewayData<Page<VirtualKey>>("/admin/virtual-keys")
+  const [issued, setIssued] = React.useState<string>()
+  const [name, setName] = React.useState("")
+
+  return (
+    <>
+      <PageHeader
+        title="Virtual keys"
+        description="Issue and revoke durable tenant credentials. Plaintext is shown once."
+      />
+      {issued && (
+        <Alert className="mb-4">
+          <AlertTitle>Copy this key now</AlertTitle>
+          <AlertDescription className="flex flex-col items-start gap-3 break-all">
+            {issued}
+            <Button
+              variant="outline"
+              onClick={() =>
+                navigator.clipboard
+                  .writeText(issued)
+                  .then(() => toast.success("Key copied"))
+              }
+            >
+              <CopyIcon data-icon="inline-start" />
+              Copy
+            </Button>
+          </AlertDescription>
+        </Alert>
+      )}
+      <Card className="mb-4">
         <CardHeader>
-          <CardTitle>Issued keys</CardTitle>
+          <CardTitle>Issue key</CardTitle>
           <CardDescription>
-            This session shows only keys issued since the page was opened
-            because listing is not available yet.
+            The credential is never persisted by the browser.
           </CardDescription>
         </CardHeader>
+        <CardContent>
+          <form
+            onSubmit={async (event) => {
+              event.preventDefault()
+              try {
+                const result = await gatewayFetch<{ key: string }>(
+                  "/admin/virtual-keys",
+                  tenantId,
+                  {
+                    method: "POST",
+                    headers: { "content-type": "application/json" },
+                    body: JSON.stringify({
+                      display_name: name,
+                      scopes: ["inference"],
+                    }),
+                  }
+                )
+                setIssued(result.key)
+                setName("")
+                state.reload()
+              } catch (error) {
+                toast.error(
+                  error instanceof Error ? error.message : "Issue failed"
+                )
+              }
+            }}
+          >
+            <FieldGroup>
+              <Field>
+                <FieldLabel htmlFor="key-name">Display name</FieldLabel>
+                <Input
+                  id="key-name"
+                  value={name}
+                  onChange={(event) => setName(event.target.value)}
+                  required
+                />
+              </Field>
+              <Button type="submit">Issue key</Button>
+            </FieldGroup>
+          </form>
+        </CardContent>
+      </Card>
+      <DataState
+        loading={state.loading}
+        error={state.error}
+        empty={state.data?.data.length === 0}
+        onRetry={state.reload}
+      >
+        <Card>
+          <CardContent>
+            <Table>
+              <TableHeader>
+                <TableRow>
+                  <TableHead>Name</TableHead>
+                  <TableHead>Prefix</TableHead>
+                  <TableHead>Status</TableHead>
+                  <TableHead />
+                </TableRow>
+              </TableHeader>
+              <TableBody>
+                {state.data?.data.map((key) => (
+                  <TableRow key={key.id}>
+                    <TableCell>{key.display_name || "Unnamed"}</TableCell>
+                    <TableCell>{key.key_prefix}</TableCell>
+                    <TableCell>
+                      <StatusBadge
+                        status={key.revoked_at ? "Revoked" : "Active"}
+                      />
+                    </TableCell>
+                    <TableCell className="text-right">
+                      <Button
+                        size="sm"
+                        variant="outline"
+                        disabled={Boolean(key.revoked_at)}
+                        onClick={async () => {
+                          await gatewayFetch<void>(
+                            `/admin/virtual-keys/${key.id}`,
+                            tenantId,
+                            { method: "DELETE" }
+                          )
+                          state.reload()
+                        }}
+                      >
+                        <TrashIcon data-icon="inline-start" />
+                        Revoke
+                      </Button>
+                    </TableCell>
+                  </TableRow>
+                ))}
+              </TableBody>
+            </Table>
+          </CardContent>
+        </Card>
+      </DataState>
+    </>
+  )
+}
+
+export function UsagePage() {
+  const summary = useGatewayData<JsonRecord>("/admin/usage/summary")
+  const events = useGatewayData<Page<JsonRecord>>("/admin/usage/events")
+  return (
+    <>
+      <PageHeader
+        title="Usage and cost"
+        description="PostgreSQL-backed usage totals and immutable events."
+      />
+      <DataState
+        loading={summary.loading}
+        error={summary.error}
+        onRetry={summary.reload}
+      >
+        <div className="mb-4 grid gap-4 md:grid-cols-3">
+          <Metric
+            label="Requests"
+            value={String(summary.data?.requests ?? 0)}
+            detail="Completed gateway events"
+          />
+          <Metric
+            label="Tokens"
+            value={String(summary.data?.total_tokens ?? 0)}
+            detail="Input plus output"
+          />
+          <Metric
+            label="Estimated cost"
+            value={`$${summary.data?.estimated_cost ?? 0}`}
+            detail="Active pricing catalog"
+          />
+        </div>
+      </DataState>
+      <RecordTable state={events} />
+    </>
+  )
+}
+
+export function DocsPage() {
+  const state = useGatewayData<JsonRecord>("/openapi.json")
+  return (
+    <>
+      <PageHeader
+        title="API documentation"
+        description="The live OpenAPI document generated by the running gateway."
+      />
+      <DataState
+        loading={state.loading}
+        error={state.error}
+        onRetry={state.reload}
+      >
+        <Card>
+          <CardContent>
+            <pre className="max-h-[70vh] overflow-auto text-xs whitespace-pre-wrap">
+              {JSON.stringify(state.data, null, 2)}
+            </pre>
+          </CardContent>
+        </Card>
+      </DataState>
+    </>
+  )
+}
+
+function RecordTable({
+  state,
+}: {
+  state: ReturnType<typeof useGatewayData<Page<JsonRecord>>>
+}) {
+  const records = state.data?.data ?? []
+  return (
+    <DataState
+      loading={state.loading}
+      error={state.error}
+      empty={records.length === 0}
+      onRetry={state.reload}
+    >
+      <Card>
         <CardContent>
           <Table>
             <TableHeader>
               <TableRow>
-                <TableHead>Name</TableHead>
-                <TableHead>Prefix</TableHead>
-                <TableHead>Quota</TableHead>
+                <TableHead>Record</TableHead>
                 <TableHead>Status</TableHead>
-                <TableHead>Action</TableHead>
               </TableRow>
             </TableHeader>
             <TableBody>
-              {keys.map((key) => (
-                <TableRow key={key.id}>
-                  <TableCell>{key.name}</TableCell>
-                  <TableCell className="font-mono">{key.prefix}</TableCell>
-                  <TableCell>{key.quota}</TableCell>
+              {records.map((record, index) => (
+                <TableRow key={String(record.id ?? record.event_id ?? index)}>
                   <TableCell>
-                    <StatusBadge status={key.status} />
+                    <pre className="max-w-4xl overflow-auto text-xs whitespace-pre-wrap">
+                      {JSON.stringify(record, null, 2)}
+                    </pre>
                   </TableCell>
                   <TableCell>
-                    {key.status === "Active" && (
-                      <AlertDialog>
-                        <AlertDialogTrigger
-                          render={
-                            <Button
-                              variant="ghost"
-                              size="icon-sm"
-                              aria-label={`Revoke ${key.name}`}
-                            />
-                          }
-                        >
-                          <TrashIcon />
-                        </AlertDialogTrigger>
-                        <AlertDialogContent>
-                          <AlertDialogHeader>
-                            <AlertDialogTitle>
-                              Revoke {key.name}?
-                            </AlertDialogTitle>
-                            <AlertDialogDescription>
-                              The key will stop authenticating immediately.
-                            </AlertDialogDescription>
-                          </AlertDialogHeader>
-                          <AlertDialogFooter>
-                            <AlertDialogCancel>Cancel</AlertDialogCancel>
-                            <AlertDialogAction
-                              variant="destructive"
-                              onClick={async () => {
-                                try {
-                                  await gatewayFetch(
-                                    `/admin/virtual-keys/${key.id}`,
-                                    state.principal!.tenantId,
-                                    { method: "DELETE" }
-                                  )
-                                  setKeys((items) =>
-                                    items.map((item) =>
-                                      item.id === key.id
-                                        ? { ...item, status: "Revoked" }
-                                        : item
-                                    )
-                                  )
-                                } catch (error) {
-                                  toast.error(
-                                    error instanceof Error
-                                      ? error.message
-                                      : "Revocation failed"
-                                  )
-                                }
-                              }}
-                            >
-                              Revoke key
-                            </AlertDialogAction>
-                          </AlertDialogFooter>
-                        </AlertDialogContent>
-                      </AlertDialog>
+                    {typeof record.status === "string" ? (
+                      <StatusBadge status={record.status} />
+                    ) : (
+                      <Badge variant="outline">Recorded</Badge>
                     )}
                   </TableCell>
                 </TableRow>
@@ -643,111 +539,6 @@ export function KeysPage() {
           </Table>
         </CardContent>
       </Card>
-    </>
-  )
-}
-
-export function UsagePage() {
-  return (
-    <>
-      <PageHeader
-        title="Usage & cost"
-        description="Mock request usage, quota, cost, and reservation query surfaces."
-      />
-      <div className="grid gap-3 sm:grid-cols-3">
-        <Metric
-          label="Tokens · 7d"
-          value="763.5k"
-          detail="534.1k input · 229.4k output"
-        />
-        <Metric
-          label="Estimated cost"
-          value="$82.41"
-          detail="Mock normalized pricing"
-        />
-        <Metric
-          label="Quota remaining"
-          value="32%"
-          detail="Mock Redis-style counter"
-        />
-      </div>
-      <Card className="mt-4">
-        <CardHeader>
-          <CardTitle>Request ledger</CardTitle>
-          <CardDescription>
-            Backend query API is not yet available.
-          </CardDescription>
-        </CardHeader>
-        <CardContent>
-          <StateVariants>
-            <UsageTable />
-          </StateVariants>
-        </CardContent>
-      </Card>
-    </>
-  )
-}
-
-const endpoints = [
-  ["GET", "/health", "Machine health"],
-  ["GET", "/ready", "Machine readiness"],
-  ["GET", "/metrics", "Machine metrics"],
-  ["GET", "/openapi.json", "Schema"],
-  ["GET", "/v1/models", "Models"],
-  ["POST", "/v1/chat/completions", "Chat"],
-  ["POST", "/v1/responses", "Responses"],
-  ["POST", "/v1/embeddings", "Embeddings"],
-  ["GET", "/v1/mcp/servers", "Permitted MCP servers"],
-  ["GET", "/v1/mcp/tools", "Permitted tools"],
-  ["POST", "/v1/mcp/tools/call", "Tool invocation"],
-  ["POST", "/mcp", "Native machine-to-machine MCP"],
-]
-
-export function DocsPage() {
-  return (
-    <>
-      <PageHeader
-        title="API docs"
-        description="Gateway v0.3 endpoint catalog and live OpenAPI surface."
-      />
-      <Alert>
-        <WarningCircleIcon />
-        <AlertTitle>Authenticated BFF enabled</AlertTitle>
-        <AlertDescription>
-          Browser credentials remain in an encrypted HttpOnly cookie. Native
-          /mcp remains machine-to-machine.
-        </AlertDescription>
-      </Alert>
-      <Card className="mt-4">
-        <CardHeader>
-          <CardTitle>Endpoints</CardTitle>
-          <CardDescription>
-            Available routes are forwarded through the same-origin web boundary.
-          </CardDescription>
-        </CardHeader>
-        <CardContent>
-          <Table>
-            <TableHeader>
-              <TableRow>
-                <TableHead>Method</TableHead>
-                <TableHead>Path</TableHead>
-                <TableHead>Surface</TableHead>
-              </TableRow>
-            </TableHeader>
-            <TableBody>
-              {endpoints.map(([method, path, surface]) => (
-                <TableRow key={`${method}${path}`}>
-                  <TableCell>
-                    <Badge variant="outline">{method}</Badge>
-                  </TableCell>
-                  <TableCell className="font-mono">{path}</TableCell>
-                  <TableCell>{surface}</TableCell>
-                </TableRow>
-              ))}
-            </TableBody>
-          </Table>
-        </CardContent>
-      </Card>
-    </>
+    </DataState>
   )
 }

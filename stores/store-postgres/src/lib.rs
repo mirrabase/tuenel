@@ -1,5 +1,6 @@
 //! PostgreSQL implementation of the gateway persistence boundary.
 
+pub mod admin;
 mod identity;
 mod security_store;
 mod v03;
@@ -505,7 +506,17 @@ async fn enforce_scope_limits(
            (scope_kind='tenant' AND scope_id=$1) OR \
            (scope_kind='project' AND scope_id=$2) OR \
            (scope_kind='principal' AND scope_id=$3) OR \
-           (scope_kind='virtual_key' AND scope_id=$4)) FOR UPDATE",
+           (scope_kind='virtual_key' AND scope_id=$4)) \
+         UNION ALL SELECT body->>'scope_kind',body->>'scope_id',body->>'period',
+           NULLIF(body->>'token_limit','')::BIGINT,NULLIF(body->>'cost_limit','')::NUMERIC,
+           NULLIF(body->>'concurrent_limit','')::BIGINT,
+           NULLIF(body->>'requests_per_minute','')::BIGINT
+         FROM admin_resources WHERE kind='quota_limits' AND tenant_id=$1
+           AND enabled=true AND retired_at IS NULL AND (\
+           (body->>'scope_kind'='tenant' AND body->>'scope_id'=$1) OR \
+           (body->>'scope_kind'='project' AND body->>'scope_id'=$2) OR \
+           (body->>'scope_kind'='principal' AND body->>'scope_id'=$3) OR \
+           (body->>'scope_kind'='virtual_key' AND body->>'scope_id'=$4))",
     )
     .bind(&reservation.tenant_id)
     .bind(reservation.project_id.as_deref().unwrap_or(""))

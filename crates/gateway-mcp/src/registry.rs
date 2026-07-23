@@ -2,7 +2,7 @@ use std::sync::Arc;
 
 use async_trait::async_trait;
 use gateway_types::{
-    GatewayMcpInvocation, GatewayMcpResult, GatewayMcpTool, McpServerId, Principal,
+    GatewayMcpInvocation, GatewayMcpResult, GatewayMcpTool, McpServerId, Principal, ToolAnnotations,
 };
 use tracing::Instrument;
 
@@ -41,6 +41,13 @@ pub trait McpRepository: McpHealthRepository + Send + Sync {
         tenant_id: &str,
         server_id: Option<McpServerId>,
     ) -> Result<Vec<GatewayMcpTool>, McpError>;
+    async fn update_tool_annotations(
+        &self,
+        tenant_id: &str,
+        server_id: McpServerId,
+        tool_name: &str,
+        annotations: ToolAnnotations,
+    ) -> Result<bool, McpError>;
 }
 
 #[derive(Clone)]
@@ -91,6 +98,17 @@ impl McpRegistry {
             let _ = transport.shutdown().await;
         }
         self.repository.delete_server(tenant_id, server_id).await
+    }
+    pub async fn update_tool_annotations(
+        &self,
+        tenant_id: &str,
+        server_id: McpServerId,
+        tool_name: &str,
+        annotations: ToolAnnotations,
+    ) -> Result<bool, McpError> {
+        self.repository
+            .update_tool_annotations(tenant_id, server_id, tool_name, annotations)
+            .await
     }
 
     pub async fn server_for(

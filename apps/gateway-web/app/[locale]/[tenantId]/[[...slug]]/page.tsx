@@ -1,6 +1,7 @@
 import { notFound } from "next/navigation"
 
 import { GatewayPage, type PageKind } from "@/components/gateway-page"
+import { getSession } from "@/lib/server-auth"
 
 const pages: Record<string, PageKind> = {
   "": "tenant-overview",
@@ -30,9 +31,19 @@ const pages: Record<string, PageKind> = {
 export default async function ScopedPage({
   params,
 }: {
-  params: Promise<{ slug?: string[] }>
+  params: Promise<{ tenantId: string; slug?: string[] }>
 }) {
-  const kind = pages[(await params).slug?.join("/") ?? ""]
+  const { tenantId, slug } = await params
+  const route = slug?.join("/") ?? ""
+  const kind = pages[route]
   if (!kind) notFound()
+  if (route.startsWith("operator")) {
+    const session = await getSession()
+    const membership = session?.memberships.find(
+      (item) => item.tenant_id === tenantId
+    )
+    if (!session || (!session.gateway_admin && membership?.role === "viewer"))
+      notFound()
+  }
   return <GatewayPage kind={kind} />
 }

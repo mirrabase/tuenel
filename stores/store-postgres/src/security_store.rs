@@ -149,8 +149,80 @@ impl SecurityRepository for PostgresStore {
         &self,
         tenant_id: &str,
     ) -> Result<Vec<gateway_security::SecurityCustomPattern>, SecurityError> {
-        sqlx::query("SELECT category,pattern FROM security_custom_patterns WHERE tenant_id=$1 AND enabled=true ORDER BY name").bind(tenant_id).fetch_all(&self.pool).await.map_err(|_|SecurityError::InspectionFailed)?.into_iter().map(|row|Ok(gateway_security::SecurityCustomPattern{category:parse_category(&row.try_get::<String,_>("category").map_err(|_|SecurityError::InspectionFailed)?),pattern:row.try_get("pattern").map_err(|_|SecurityError::InspectionFailed)?})).collect()
+        sqlx::query("SELECT pattern_id,tenant_id,name,category,pattern,enabled,version,created_at,updated_at FROM security_custom_patterns WHERE tenant_id=$1 ORDER BY name").bind(tenant_id).fetch_all(&self.pool).await.map_err(|_|SecurityError::InspectionFailed)?.into_iter().map(pattern_from_row).collect()
     }
+    async fn insert_custom_pattern(
+        &self,
+        pattern: gateway_security::SecurityCustomPattern,
+    ) -> Result<(), SecurityError> {
+        sqlx::query("INSERT INTO security_custom_patterns(pattern_id,tenant_id,name,category,pattern,enabled,version,created_at,updated_at) VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9)")
+            .bind(pattern.pattern_id).bind(pattern.tenant_id).bind(pattern.name)
+            .bind(category_name(pattern.category)).bind(pattern.pattern).bind(pattern.enabled)
+            .bind(i64::try_from(pattern.version).map_err(|_|SecurityError::InspectionFailed)?)
+            .bind(pattern.created_at).bind(pattern.updated_at).execute(&self.pool).await
+            .map_err(|_|SecurityError::InspectionFailed).map(|_|())
+    }
+    async fn update_custom_pattern(
+        &self,
+        pattern: gateway_security::SecurityCustomPattern,
+        expected_version: u64,
+    ) -> Result<bool, SecurityError> {
+        sqlx::query("UPDATE security_custom_patterns SET name=$3,category=$4,pattern=$5,enabled=$6,version=version+1,updated_at=now() WHERE tenant_id=$1 AND pattern_id=$2 AND version=$7")
+            .bind(pattern.tenant_id).bind(pattern.pattern_id).bind(pattern.name)
+            .bind(category_name(pattern.category)).bind(pattern.pattern).bind(pattern.enabled)
+            .bind(i64::try_from(expected_version).map_err(|_|SecurityError::InspectionFailed)?)
+            .execute(&self.pool).await.map_err(|_|SecurityError::InspectionFailed)
+            .map(|result|result.rows_affected()==1)
+    }
+    async fn delete_custom_pattern(
+        &self,
+        tenant_id: &str,
+        pattern_id: uuid::Uuid,
+        expected_version: u64,
+    ) -> Result<bool, SecurityError> {
+        sqlx::query("UPDATE security_custom_patterns SET enabled=false,version=version+1,updated_at=now() WHERE tenant_id=$1 AND pattern_id=$2 AND version=$3")
+            .bind(tenant_id).bind(pattern_id)
+            .bind(i64::try_from(expected_version).map_err(|_|SecurityError::InspectionFailed)?)
+            .execute(&self.pool).await.map_err(|_|SecurityError::InspectionFailed)
+            .map(|result|result.rows_affected()==1)
+    }
+}
+
+fn pattern_from_row(
+    row: sqlx::postgres::PgRow,
+) -> Result<gateway_security::SecurityCustomPattern, SecurityError> {
+    Ok(gateway_security::SecurityCustomPattern {
+        pattern_id: row
+            .try_get("pattern_id")
+            .map_err(|_| SecurityError::InspectionFailed)?,
+        tenant_id: row
+            .try_get("tenant_id")
+            .map_err(|_| SecurityError::InspectionFailed)?,
+        name: row
+            .try_get("name")
+            .map_err(|_| SecurityError::InspectionFailed)?,
+        category: parse_category(
+            &row.try_get::<String, _>("category")
+                .map_err(|_| SecurityError::InspectionFailed)?,
+        ),
+        pattern: row
+            .try_get("pattern")
+            .map_err(|_| SecurityError::InspectionFailed)?,
+        enabled: row
+            .try_get("enabled")
+            .map_err(|_| SecurityError::InspectionFailed)?,
+        version: row
+            .try_get::<i64, _>("version")
+            .map_err(|_| SecurityError::InspectionFailed)?
+            .try_into()
+            .map_err(|_| SecurityError::InspectionFailed)?,
+        created_at: row
+            .try_get("created_at")
+            .map_err(|_| SecurityError::InspectionFailed)?,
+        updated_at: row
+            .try_get("updated_at")
+            .map_err(|_| SecurityError::InspectionFailed)?,
+    })
 }
 
 fn policy_from_row(row: sqlx::postgres::PgRow) -> Result<SecurityPolicyRecord, SecurityError> {

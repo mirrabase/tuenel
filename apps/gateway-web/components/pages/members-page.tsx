@@ -5,7 +5,8 @@ import { usePathname } from "next/navigation"
 import { ClipboardIcon } from "@phosphor-icons/react"
 import { toast } from "sonner"
 
-import { useMockGateway } from "@/components/mock-provider"
+import { useGateway } from "@/components/gateway-provider"
+import { DataState, useGatewayData } from "@/components/pages/shared"
 import { PageHeader } from "@/components/pages/shared"
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert"
 import { Button } from "@/components/ui/button"
@@ -27,15 +28,24 @@ import {
   SelectValue,
 } from "@/components/ui/select"
 import { gatewayFetch } from "@/lib/gateway-api"
+import type { Page } from "@/lib/gateway-api"
+
+type Member = {
+  user_id: string
+  email: string
+  role: string
+  created_at: string
+}
 
 export function MembersPage() {
-  const { state } = useMockGateway()
+  const session = useGateway()
+  const members = useGatewayData<Page<Member>>(
+    `/auth/tenants/${session.tenantId}/members`
+  )
   const locale = usePathname().split("/")[1]
   const [role, setRole] = React.useState("engineer")
   const [link, setLink] = React.useState<string>()
-  const canInvite = ["owner", "admin"].includes(
-    state.principal?.tenantRole ?? ""
-  )
+  const canInvite = ["owner", "admin"].includes(session.tenantRole)
   return (
     <>
       <PageHeader
@@ -84,8 +94,8 @@ export function MembersPage() {
                 )
                 try {
                   const result = await gatewayFetch<{ token: string }>(
-                    `/auth/tenants/${state.principal!.tenantId}/invitations`,
-                    state.principal!.tenantId,
+                    `/auth/tenants/${session.tenantId}/invitations`,
+                    session.tenantId,
                     {
                       method: "POST",
                       headers: { "content-type": "application/json" },
@@ -133,6 +143,34 @@ export function MembersPage() {
               </FieldGroup>
             </form>
           )}
+        </CardContent>
+      </Card>
+      <Card className="mt-4">
+        <CardHeader>
+          <CardTitle>Current members</CardTitle>
+          <CardDescription>Durable tenant memberships.</CardDescription>
+        </CardHeader>
+        <CardContent>
+          <DataState
+            loading={members.loading}
+            error={members.error}
+            empty={members.data?.data.length === 0}
+            onRetry={members.reload}
+          >
+            <div className="flex flex-col gap-3">
+              {members.data?.data.map((member) => (
+                <div
+                  key={member.user_id}
+                  className="flex items-center justify-between rounded-md border p-3"
+                >
+                  <span>{member.email}</span>
+                  <span className="text-sm text-muted-foreground">
+                    {member.role}
+                  </span>
+                </div>
+              ))}
+            </div>
+          </DataState>
         </CardContent>
       </Card>
     </>

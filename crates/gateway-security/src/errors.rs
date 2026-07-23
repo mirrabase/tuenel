@@ -16,4 +16,6 @@ pub enum SecurityError {
     ApprovalRequired,
     #[error("security content is too large")]
     ContentTooLarge,
+    #[error("invalid custom security pattern")]
+    InvalidPattern,
 }

@@ -60,6 +60,7 @@ export type Membership = {
 export type Session = {
   user_id: string
   email: string
+  gateway_admin: boolean
   expires_at: string
   memberships: Membership[]
 }

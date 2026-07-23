@@ -1,233 +1,92 @@
 "use client"
 
 import * as React from "react"
-import {
-  EyeIcon,
-  ShieldWarningIcon,
-  WarningCircleIcon,
-} from "@phosphor-icons/react"
+import { CheckIcon } from "@phosphor-icons/react"
+import { toast } from "sonner"
 
-import { useMockGateway } from "@/components/mock-provider"
+import { useGateway } from "@/components/gateway-provider"
 import {
-  BackendNotice,
+  DataState,
   PageHeader,
   StatusBadge,
+  useGatewayData,
 } from "@/components/pages/shared"
-import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert"
-import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
-import {
-  Card,
-  CardContent,
-  CardDescription,
-  CardHeader,
-  CardTitle,
-} from "@/components/ui/card"
-import {
-  Field,
-  FieldDescription,
-  FieldGroup,
-  FieldLabel,
-  FieldLegend,
-  FieldSet,
-} from "@/components/ui/field"
-import { Input } from "@/components/ui/input"
-import {
-  Select,
-  SelectContent,
-  SelectGroup,
-  SelectItem,
-  SelectTrigger,
-  SelectValue,
-} from "@/components/ui/select"
-import {
-  Sheet,
-  SheetContent,
-  SheetDescription,
-  SheetHeader,
-  SheetTitle,
-  SheetTrigger,
-} from "@/components/ui/sheet"
-import { Switch } from "@/components/ui/switch"
-import {
-  Table,
-  TableBody,
-  TableCell,
-  TableHead,
-  TableHeader,
-  TableRow,
-} from "@/components/ui/table"
+import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
+import { Field, FieldGroup, FieldLabel } from "@/components/ui/field"
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs"
 import { Textarea } from "@/components/ui/textarea"
-import type { SecurityAction } from "@/lib/mock-store"
+import { type Page, gatewayFetch } from "@/lib/gateway-api"
+
+type SecurityRecord = Record<string, unknown> & {
+  policy_id?: string
+  pattern_id?: string
+  incident_id?: string
+  finding_id?: string
+  event_id?: string
+  status?: string
+}
 
 export function SecurityPoliciesPage() {
-  const { state, dispatch } = useMockGateway()
-  const original = Object.values(state.securityPolicies)[0]
-  const [policy, setPolicy] = React.useState(original)
-  const toggle = (
-    key:
-      | "inspectRequest"
-      | "inspectResponse"
-      | "inspectMcpArguments"
-      | "inspectMcpResult"
-      | "failOpen"
-      | "createIncident",
-    value: boolean
-  ) => setPolicy((current) => ({ ...current, [key]: value }))
   return (
     <>
       <PageHeader
         title="Security policies"
-        description="Simulated inspection stages, incident behavior, content ceiling, and category/severity actions."
+        description="Durable policy enforcement and custom detector patterns."
       />
-      <BackendNotice>
-        Detector and policy business logic stays in the backend. This editor
-        selects deterministic fixtures only.
-      </BackendNotice>
-      {policy.failOpen && (
-        <Alert className="mt-4" variant="destructive">
-          <WarningCircleIcon />
-          <AlertTitle>Fail-open enabled</AlertTitle>
-          <AlertDescription>
-            Requests would continue when inspection is unavailable. Use only
-            with an explicit risk decision.
-          </AlertDescription>
-        </Alert>
-      )}
-      <Card className="mt-4">
-        <CardHeader>
-          <CardTitle>{policy.name}</CardTitle>
-          <CardDescription>Mock policy editor</CardDescription>
-        </CardHeader>
-        <CardContent>
-          <FieldGroup>
-            <FieldSet>
-              <FieldLegend variant="label">Inspection stages</FieldLegend>
-              <FieldDescription>
-                Enable the stages represented by the Gateway v0.3 policy
-                contract.
-              </FieldDescription>
-              <FieldGroup className="gap-3">
-                {(
-                  [
-                    ["inspectRequest", "Request"],
-                    ["inspectResponse", "Response"],
-                    ["inspectMcpArguments", "MCP arguments"],
-                    ["inspectMcpResult", "MCP result"],
-                    ["createIncident", "Create incident"],
-                    ["failOpen", "Fail open"],
-                  ] as const
-                ).map(([key, label]) => (
-                  <Field orientation="horizontal" key={key}>
-                    <FieldLabel htmlFor={key}>{label}</FieldLabel>
-                    <Switch
-                      id={key}
-                      checked={policy[key]}
-                      onCheckedChange={(value) => toggle(key, value)}
-                    />
-                  </Field>
-                ))}
-              </FieldGroup>
-            </FieldSet>
-            <Field>
-              <FieldLabel htmlFor="max-content">
-                Maximum content size (bytes)
-              </FieldLabel>
-              <Input
-                id="max-content"
-                type="number"
-                min="1"
-                value={policy.maxBytes}
-                onChange={(event) =>
-                  setPolicy((current) => ({
-                    ...current,
-                    maxBytes: Number(event.target.value),
-                  }))
-                }
-              />
-            </Field>
-            <FieldSet>
-              <FieldLegend variant="label">
-                Category / severity action matrix
-              </FieldLegend>
-              <FieldGroup>
-                {(
-                  Object.keys(policy.matrix) as Array<
-                    keyof typeof policy.matrix
-                  >
-                ).map((category) => (
-                  <Field orientation="horizontal" key={category}>
-                    <FieldLabel>
-                      {category} /{" "}
-                      {category === "injection" || category === "malware"
-                        ? "critical"
-                        : category === "credentials"
-                          ? "high"
-                          : "medium"}
-                    </FieldLabel>
-                    <Select
-                      items={["allow", "warn", "redact", "block"].map(
-                        (value) => ({ label: value, value })
-                      )}
-                      value={policy.matrix[category]}
-                      onValueChange={(value) =>
-                        value &&
-                        setPolicy((current) => ({
-                          ...current,
-                          matrix: {
-                            ...current.matrix,
-                            [category]: value as SecurityAction,
-                          },
-                        }))
-                      }
-                    >
-                      <SelectTrigger>
-                        <SelectValue />
-                      </SelectTrigger>
-                      <SelectContent>
-                        <SelectGroup>
-                          {["allow", "warn", "redact", "block"].map((value) => (
-                            <SelectItem key={value} value={value}>
-                              {value}
-                            </SelectItem>
-                          ))}
-                        </SelectGroup>
-                      </SelectContent>
-                    </Select>
-                  </Field>
-                ))}
-              </FieldGroup>
-            </FieldSet>
-            <Button
-              onClick={() => dispatch({ type: "security-policy.save", policy })}
-            >
-              Save simulated policy
-            </Button>
-          </FieldGroup>
-        </CardContent>
-      </Card>
+      <Tabs defaultValue="policies">
+        <TabsList>
+          <TabsTrigger value="policies">Policies</TabsTrigger>
+          <TabsTrigger value="patterns">Custom patterns</TabsTrigger>
+        </TabsList>
+        <TabsContent value="policies" className="pt-4">
+          <SecurityResource
+            path="/admin/security/policies"
+            idField="policy_id"
+            initial={{
+              name: "",
+              enabled: true,
+              scope_kind: "tenant",
+              scope_id: "",
+              policy: {
+                minimum_action_by_severity: {},
+                category_actions: {},
+                fail_open: false,
+              },
+            }}
+          />
+        </TabsContent>
+        <TabsContent value="patterns" className="pt-4">
+          <SecurityResource
+            path="/admin/security/patterns"
+            idField="pattern_id"
+            initial={{
+              name: "",
+              category: "policy_violation",
+              pattern: "",
+              enabled: true,
+            }}
+          />
+        </TabsContent>
+      </Tabs>
     </>
   )
 }
 
 export function SecurityOperationsPage() {
-  const { state, dispatch } = useMockGateway()
-  const tenantId = state.principal?.tenantId
-  const [status, setStatus] = React.useState("all")
-  const incidents = Object.values(state.incidents).filter(
-    (item) =>
-      item.tenantId === tenantId && (status === "all" || item.status === status)
+  const { tenantId } = useGateway()
+  const incidents = useGatewayData<Page<SecurityRecord>>(
+    "/admin/security/incidents"
   )
-  const findings = state.findings.filter((item) => item.tenantId === tenantId)
-  const events = state.securityEvents.filter(
-    (item) => item.tenantId === tenantId
+  const findings = useGatewayData<Page<SecurityRecord>>(
+    "/admin/security/findings"
   )
+  const events = useGatewayData<Page<SecurityRecord>>("/admin/security/events")
   return (
     <>
       <PageHeader
         title="Security operations"
-        description="Tenant-isolated incidents, findings, events, risk scores, and sanitized request references."
+        description="Incidents, findings, and immutable security events."
       />
       <Tabs defaultValue="incidents">
         <TabsList>
@@ -235,217 +94,148 @@ export function SecurityOperationsPage() {
           <TabsTrigger value="findings">Findings</TabsTrigger>
           <TabsTrigger value="events">Events</TabsTrigger>
         </TabsList>
-        <TabsContent value="incidents" className="pt-3">
-          <Card>
-            <CardHeader>
-              <CardTitle>Incident queue</CardTitle>
-              <CardDescription>
-                Notes accept sanitized text only.
-              </CardDescription>
-            </CardHeader>
-            <CardContent className="flex flex-col gap-3">
-              <Select
-                items={["all", "open", "investigating", "resolved"].map(
-                  (value) => ({ label: value, value })
-                )}
-                value={status}
-                onValueChange={(value) => value && setStatus(value)}
-              >
-                <SelectTrigger className="w-48">
-                  <SelectValue />
-                </SelectTrigger>
-                <SelectContent>
-                  <SelectGroup>
-                    {["all", "open", "investigating", "resolved"].map(
-                      (value) => (
-                        <SelectItem key={value} value={value}>
-                          {value}
-                        </SelectItem>
-                      )
-                    )}
-                  </SelectGroup>
-                </SelectContent>
-              </Select>
-              <Table>
-                <TableHeader>
-                  <TableRow>
-                    <TableHead>Incident</TableHead>
-                    <TableHead>Request</TableHead>
-                    <TableHead>Risk</TableHead>
-                    <TableHead>Status</TableHead>
-                    <TableHead>Detail</TableHead>
-                  </TableRow>
-                </TableHeader>
-                <TableBody>
-                  {incidents.map((incident) => (
-                    <TableRow key={incident.id}>
-                      <TableCell>
-                        <div className="font-medium">{incident.title}</div>
-                        <div className="font-mono text-muted-foreground">
-                          {incident.id}
-                        </div>
-                      </TableCell>
-                      <TableCell className="font-mono">
-                        {incident.requestId}
-                      </TableCell>
-                      <TableCell>
-                        <Badge variant="outline">
-                          {incident.riskScore}/100 · {incident.severity}
-                        </Badge>
-                      </TableCell>
-                      <TableCell>
-                        <StatusBadge status={incident.status} />
-                      </TableCell>
-                      <TableCell>
-                        <Sheet>
-                          <SheetTrigger
-                            render={<Button size="sm" variant="outline" />}
-                          >
-                            <EyeIcon data-icon="inline-start" />
-                            Inspect
-                          </SheetTrigger>
-                          <SheetContent>
-                            <SheetHeader>
-                              <SheetTitle>{incident.title}</SheetTitle>
-                              <SheetDescription>
-                                Sanitized operational detail for{" "}
-                                {incident.requestId}.
-                              </SheetDescription>
-                            </SheetHeader>
-                            <IncidentEditor
-                              incident={incident}
-                              onSave={(nextStatus, note) =>
-                                dispatch({
-                                  type: "incident.status",
-                                  id: incident.id,
-                                  status: nextStatus,
-                                  note,
-                                })
-                              }
-                            />
-                          </SheetContent>
-                        </Sheet>
-                      </TableCell>
-                    </TableRow>
-                  ))}
-                </TableBody>
-              </Table>
-            </CardContent>
-          </Card>
+        <TabsContent value="incidents" className="pt-4">
+          <SecurityList
+            state={incidents}
+            action={async (record) => {
+              await gatewayFetch(
+                `/admin/security/incidents/${record.incident_id}`,
+                tenantId,
+                {
+                  method: "PATCH",
+                  headers: { "content-type": "application/json" },
+                  body: JSON.stringify({ status: "resolved" }),
+                }
+              )
+              incidents.reload()
+            }}
+          />
         </TabsContent>
-        <TabsContent value="findings" className="pt-3">
-          <Card>
-            <CardHeader>
-              <CardTitle>Sanitized findings</CardTitle>
-              <CardDescription>
-                Evidence never includes complete secrets or raw malicious
-                content.
-              </CardDescription>
-            </CardHeader>
-            <CardContent>
-              {findings.map((finding) => (
-                <Alert key={finding.id} className="mb-3">
-                  <ShieldWarningIcon />
-                  <AlertTitle>
-                    {finding.category} · {finding.severity}
-                  </AlertTitle>
-                  <AlertDescription>{finding.evidence}</AlertDescription>
-                </Alert>
-              ))}
-            </CardContent>
-          </Card>
+        <TabsContent value="findings" className="pt-4">
+          <SecurityList state={findings} />
         </TabsContent>
-        <TabsContent value="events" className="pt-3">
-          <Card>
-            <CardHeader>
-              <CardTitle>Security events</CardTitle>
-              <CardDescription>
-                Mock references join back to gateway request IDs.
-              </CardDescription>
-            </CardHeader>
-            <CardContent>
-              <Table>
-                <TableHeader>
-                  <TableRow>
-                    <TableHead>Event</TableHead>
-                    <TableHead>Request</TableHead>
-                    <TableHead>Action</TableHead>
-                    <TableHead>Detail</TableHead>
-                  </TableRow>
-                </TableHeader>
-                <TableBody>
-                  {events.map((event) => (
-                    <TableRow key={event.id}>
-                      <TableCell className="font-mono">{event.id}</TableCell>
-                      <TableCell className="font-mono">
-                        {event.requestId}
-                      </TableCell>
-                      <TableCell>
-                        <StatusBadge status={event.action} />
-                      </TableCell>
-                      <TableCell>{event.detail}</TableCell>
-                    </TableRow>
-                  ))}
-                </TableBody>
-              </Table>
-            </CardContent>
-          </Card>
+        <TabsContent value="events" className="pt-4">
+          <SecurityList state={events} />
         </TabsContent>
       </Tabs>
     </>
   )
 }
 
-function IncidentEditor({
-  incident,
-  onSave,
+function SecurityResource({
+  path,
+  idField,
+  initial,
 }: {
-  incident: { status: "open" | "investigating" | "resolved"; note: string }
-  onSave: (status: "open" | "investigating" | "resolved", note: string) => void
+  path: string
+  idField: string
+  initial: Record<string, unknown>
 }) {
-  const [status, setStatus] = React.useState(incident.status)
-  const [note, setNote] = React.useState(incident.note)
+  const { tenantId } = useGateway()
+  const state = useGatewayData<Page<SecurityRecord>>(path)
+  const [body, setBody] = React.useState(JSON.stringify(initial, null, 2))
   return (
-    <div className="flex flex-col gap-4 p-4">
-      <FieldGroup>
-        <Field>
-          <FieldLabel>Status</FieldLabel>
-          <Select
-            items={["open", "investigating", "resolved"].map((value) => ({
-              label: value,
-              value,
-            }))}
-            value={status}
-            onValueChange={(value) =>
-              value && setStatus(value as typeof status)
-            }
-          >
-            <SelectTrigger className="w-full">
-              <SelectValue />
-            </SelectTrigger>
-            <SelectContent>
-              <SelectGroup>
-                {["open", "investigating", "resolved"].map((value) => (
-                  <SelectItem key={value} value={value}>
-                    {value}
-                  </SelectItem>
-                ))}
-              </SelectGroup>
-            </SelectContent>
-          </Select>
-        </Field>
-        <Field>
-          <FieldLabel htmlFor="incident-note">Sanitized note</FieldLabel>
-          <Textarea
-            id="incident-note"
-            value={note}
-            onChange={(event) => setNote(event.target.value)}
-          />
-        </Field>
-        <Button onClick={() => onSave(status, note)}>
-          Update simulated incident
-        </Button>
-      </FieldGroup>
+    <div className="flex flex-col gap-4">
+      <Card>
+        <CardHeader>
+          <CardTitle>Create resource</CardTitle>
+        </CardHeader>
+        <CardContent>
+          <FieldGroup>
+            <Field>
+              <FieldLabel htmlFor={`${idField}-body`}>JSON</FieldLabel>
+              <Textarea
+                id={`${idField}-body`}
+                value={body}
+                onChange={(event) => setBody(event.target.value)}
+                rows={10}
+              />
+            </Field>
+            <Button
+              onClick={async () => {
+                try {
+                  await gatewayFetch(path, tenantId, {
+                    method: "POST",
+                    headers: { "content-type": "application/json" },
+                    body: JSON.stringify(JSON.parse(body)),
+                  })
+                  state.reload()
+                } catch (error) {
+                  toast.error(
+                    error instanceof Error ? error.message : "Create failed"
+                  )
+                }
+              }}
+            >
+              Save
+            </Button>
+          </FieldGroup>
+        </CardContent>
+      </Card>
+      <SecurityList state={state} />
     </div>
+  )
+}
+
+function SecurityList({
+  state,
+  action,
+}: {
+  state: ReturnType<typeof useGatewayData<Page<SecurityRecord>>>
+  action?: (record: SecurityRecord) => Promise<void>
+}) {
+  const records = state.data?.data ?? []
+  return (
+    <DataState
+      loading={state.loading}
+      error={state.error}
+      empty={records.length === 0}
+      onRetry={state.reload}
+    >
+      <Card>
+        <CardContent className="flex flex-col gap-3">
+          {records.map((record, index) => (
+            <div
+              key={String(
+                record.incident_id ??
+                  record.finding_id ??
+                  record.event_id ??
+                  record.policy_id ??
+                  record.pattern_id ??
+                  index
+              )}
+              className="flex items-start justify-between gap-3 rounded-md border p-3"
+            >
+              <pre className="overflow-auto text-xs whitespace-pre-wrap">
+                {JSON.stringify(record, null, 2)}
+              </pre>
+              <div className="flex flex-col items-end gap-2">
+                {record.status && <StatusBadge status={record.status} />}
+                {action && record.status !== "resolved" && (
+                  <Button
+                    size="sm"
+                    variant="outline"
+                    onClick={async () => {
+                      try {
+                        await action(record)
+                      } catch (error) {
+                        toast.error(
+                          error instanceof Error
+                            ? error.message
+                            : "Update failed"
+                        )
+                      }
+                    }}
+                  >
+                    <CheckIcon data-icon="inline-start" />
+                    Resolve
+                  </Button>
+                )}
+              </div>
+            </div>
+          ))}
+        </CardContent>
+      </Card>
+    </DataState>
   )
 }
