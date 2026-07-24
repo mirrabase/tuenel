@@ -10,7 +10,10 @@ use chrono::{DateTime, Utc};
 use futures::{Stream, StreamExt};
 use gateway_metering::MeteringService;
 use gateway_policy::{AllowAllPolicyResolver, PolicyError, PolicyResolver};
-use gateway_providers::{ModelProvider, ProviderContext, ProviderError, ProviderRegistry};
+use gateway_providers::{
+    ModelProvider, ProviderContext, ProviderError, ProviderHealth, ProviderHealthRepository,
+    ProviderRegistry,
+};
 use gateway_quota::{QuotaError, QuotaService};
 use gateway_routing::{RoutePlan, RoutingError, StaticRouter, retryable};
 use gateway_security::{SecurityEnforcer, SecurityError};
@@ -89,6 +92,37 @@ impl GatewayRuntime {
 
     pub fn model_route(&self) -> ModelRoute {
         self.service().model_route().clone()
+    }
+
+    pub fn model_aliases(&self, principal: &Principal) -> Vec<String> {
+        self.service().model_aliases(principal)
+    }
+
+    pub async fn check_provider(
+        &self,
+        provider_id: &str,
+        repository: &dyn ProviderHealthRepository,
+    ) -> Result<ProviderHealth, ProviderError> {
+        let service = self.service();
+        let health = service
+            .providers
+            .check_health(provider_id, service.request_timeout)
+            .await?;
+        repository
+            .record_provider_health(provider_id, health.clone())
+            .await?;
+        Ok(health)
+    }
+
+    pub async fn list_provider_models(
+        &self,
+        provider_id: &str,
+    ) -> Result<Vec<String>, ProviderError> {
+        let service = self.service();
+        service
+            .providers
+            .list_models(provider_id, service.request_timeout)
+            .await
     }
 
     pub async fn execute(
@@ -245,6 +279,39 @@ impl GatewayService {
         self.router.route()
     }
 
+    pub fn model_aliases(&self, principal: &Principal) -> Vec<String> {
+        let mut aliases = self
+            .route_plan
+            .as_ref()
+            .map(|plan| {
+                plan.targets()
+                    .filter(|target| {
+                        target.enabled
+                            && plan
+                                .route_for(
+                                    Some(&principal.tenant_id),
+                                    principal.project_id.as_deref(),
+                                    &target.requested_model,
+                                )
+                                .is_ok()
+                    })
+                    .map(|target| target.requested_model.clone())
+                    .collect::<Vec<_>>()
+            })
+            .unwrap_or_else(|| vec![self.router.route().requested_model.clone()]);
+        aliases.sort();
+        aliases.dedup();
+        let model_scopes = principal
+            .scopes
+            .iter()
+            .filter_map(|scope| scope.strip_prefix("model:"))
+            .collect::<Vec<_>>();
+        if !model_scopes.is_empty() {
+            aliases.retain(|alias| model_scopes.contains(&alias.as_str()));
+        }
+        aliases
+    }
+
     /// Execute and meter a non-streaming completion.
     pub async fn execute(
         &self,
@@ -261,7 +328,7 @@ impl GatewayService {
         .await?;
         self.inspect_messages(request_id, &principal, &mut request.messages)
             .await?;
-        let routes = self.routes(&request.model)?;
+        let routes = self.routes(&principal, &request.model)?;
         let mut last_error = ProviderError::Unavailable;
         for (index, route) in routes.iter().enumerate() {
             let started = Instant::now();
@@ -285,14 +352,20 @@ impl GatewayService {
                     let inspection = self
                         .inspect_response(request_id, &principal, &mut response)
                         .await;
-                    self.record(&reservation, response.usage, UsageStatus::Succeeded)
-                        .await?;
+                    self.record(
+                        &reservation,
+                        response.usage,
+                        UsageStatus::Succeeded,
+                        started,
+                    )
+                    .await?;
                     inspection?;
                     log_completion(&reservation, UsageStatus::Succeeded, started);
                     return Ok(response);
                 }
                 Err(error) => {
-                    self.record(
+                    let can_retry = index + 1 < routes.len() && retryable(&error);
+                    self.record_or_release(
                         &reservation,
                         TokenUsage {
                             prompt_tokens: reservation.prompt_tokens,
@@ -300,10 +373,11 @@ impl GatewayService {
                             estimated: true,
                         },
                         UsageStatus::ProviderFailed,
+                        started,
+                        can_retry,
                     )
                     .await?;
                     log_completion(&reservation, UsageStatus::ProviderFailed, started);
-                    let can_retry = index + 1 < routes.len() && retryable(&error);
                     last_error = error;
                     if !can_retry {
                         break;
@@ -330,10 +404,11 @@ impl GatewayService {
         .await?;
         self.inspect_inference(request_id, &principal, &mut request)
             .await?;
-        let routes = self.routes(&request.requested_model)?;
+        let routes = self.routes(&principal, &request.requested_model)?;
         let legacy = canonical_request(&request, false);
         let mut last_error = ProviderError::Unavailable;
         for (index, route) in routes.iter().enumerate() {
+            let started = Instant::now();
             let reservation = self.reserve(request_id, &principal, &legacy, route).await?;
             let context = ProviderContext {
                 request_id,
@@ -352,22 +427,29 @@ impl GatewayService {
                     let inspection = self
                         .inspect_response(request_id, &principal, &mut response)
                         .await;
-                    self.record(&reservation, response.usage, UsageStatus::Succeeded)
-                        .await?;
+                    self.record(
+                        &reservation,
+                        response.usage,
+                        UsageStatus::Succeeded,
+                        started,
+                    )
+                    .await?;
                     inspection?;
                     return Ok(response);
                 }
                 Err(error) => {
-                    self.record(
+                    let can_retry = index + 1 < routes.len() && retryable(&error);
+                    self.record_or_release(
                         &reservation,
                         TokenUsage {
                             prompt_tokens: reservation.prompt_tokens,
                             ..Default::default()
                         },
                         UsageStatus::ProviderFailed,
+                        started,
+                        can_retry,
                     )
                     .await?;
-                    let can_retry = index + 1 < routes.len() && retryable(&error);
                     last_error = error;
                     if !can_retry {
                         break;
@@ -395,10 +477,11 @@ impl GatewayService {
         self.inspect_inference(request_id, &principal, &mut request)
             .await?;
         let output_security = self.output_security(request_id, &principal).await?;
-        let routes = self.routes(&request.requested_model)?;
+        let routes = self.routes(&principal, &request.requested_model)?;
         let legacy = canonical_request(&request, true);
         let mut last_error = ProviderError::Unavailable;
         for (index, route) in routes.iter().enumerate() {
+            let started = Instant::now();
             let reservation = self.reserve(request_id, &principal, &legacy, route).await?;
             let context = ProviderContext {
                 request_id,
@@ -426,7 +509,7 @@ impl GatewayService {
                             metering,
                             quota,
                             true,
-                            Instant::now(),
+                            started,
                             security,
                         )
                         .await;
@@ -434,16 +517,18 @@ impl GatewayService {
                     return Ok(Box::pin(ReceiverStream::new(receiver)));
                 }
                 Err(error) => {
-                    self.record(
+                    let can_retry = index + 1 < routes.len() && retryable(&error);
+                    self.record_or_release(
                         &reservation,
                         TokenUsage {
                             prompt_tokens: reservation.prompt_tokens,
                             ..Default::default()
                         },
                         UsageStatus::ProviderFailed,
+                        started,
+                        can_retry,
                     )
                     .await?;
-                    let can_retry = index + 1 < routes.len() && retryable(&error);
                     last_error = error;
                     if !can_retry {
                         break;
@@ -465,7 +550,7 @@ impl GatewayService {
             .await?;
         self.inspect_embeddings(request_id, &principal, &mut request)
             .await?;
-        let routes = self.routes(&request.requested_model)?;
+        let routes = self.routes(&principal, &request.requested_model)?;
         let legacy = GatewayRequest {
             model: request.requested_model.clone(),
             messages: request
@@ -482,6 +567,7 @@ impl GatewayService {
         };
         let mut last_error = ProviderError::Unavailable;
         for (index, route) in routes.iter().enumerate() {
+            let started = Instant::now();
             let reservation = self.reserve(request_id, &principal, &legacy, route).await?;
             let context = ProviderContext {
                 request_id,
@@ -502,21 +588,23 @@ impl GatewayService {
                         completion_tokens: 0,
                         estimated: false,
                     };
-                    self.record(&reservation, usage, UsageStatus::Succeeded)
+                    self.record(&reservation, usage, UsageStatus::Succeeded, started)
                         .await?;
                     return Ok(response);
                 }
                 Err(error) => {
-                    self.record(
+                    let can_retry = index + 1 < routes.len() && retryable(&error);
+                    self.record_or_release(
                         &reservation,
                         TokenUsage {
                             prompt_tokens: reservation.prompt_tokens,
                             ..Default::default()
                         },
                         UsageStatus::ProviderFailed,
+                        started,
+                        can_retry,
                     )
                     .await?;
-                    let can_retry = index + 1 < routes.len() && retryable(&error);
                     last_error = error;
                     if !can_retry {
                         break;
@@ -544,7 +632,7 @@ impl GatewayService {
         self.inspect_messages(request_id, &principal, &mut request.messages)
             .await?;
         let output_security = self.output_security(request_id, &principal).await?;
-        let routes = self.routes(&request.model)?;
+        let routes = self.routes(&principal, &request.model)?;
         let include_usage = request.stream_include_usage;
         let mut last_error = ProviderError::Unavailable;
         for (index, route) in routes.iter().enumerate() {
@@ -586,7 +674,8 @@ impl GatewayService {
                     return Ok(Box::pin(ReceiverStream::new(receiver)));
                 }
                 Err(error) => {
-                    self.record(
+                    let can_retry = index + 1 < routes.len() && retryable(&error);
+                    self.record_or_release(
                         &reservation,
                         TokenUsage {
                             prompt_tokens: reservation.prompt_tokens,
@@ -594,10 +683,11 @@ impl GatewayService {
                             estimated: true,
                         },
                         UsageStatus::ProviderFailed,
+                        started,
+                        can_retry,
                     )
                     .await?;
                     log_completion(&reservation, UsageStatus::ProviderFailed, started);
-                    let can_retry = index + 1 < routes.len() && retryable(&error);
                     last_error = error;
                     if !can_retry {
                         break;
@@ -632,12 +722,38 @@ impl GatewayService {
         reservation: &QuotaReservation,
         usage: TokenUsage,
         status: UsageStatus,
+        started: Instant,
     ) -> Result<(), GatewayError> {
-        let result = record_usage(&self.metering, reservation, usage, status)
-            .await
-            .map_err(|_| GatewayError::Metering);
+        let result = record_usage(
+            &self.metering,
+            reservation,
+            usage,
+            status,
+            Some(started.elapsed().as_millis() as u64),
+        )
+        .await
+        .map_err(|_| GatewayError::Metering);
         self.quota.release_counter(reservation.reservation_id).await;
         result
+    }
+
+    async fn record_or_release(
+        &self,
+        reservation: &QuotaReservation,
+        usage: TokenUsage,
+        status: UsageStatus,
+        started: Instant,
+        retrying: bool,
+    ) -> Result<(), GatewayError> {
+        if retrying {
+            self.metering
+                .release(reservation.reservation_id)
+                .await
+                .map_err(|_| GatewayError::Metering)?;
+            self.quota.release_counter(reservation.reservation_id).await;
+            return Ok(());
+        }
+        self.record(reservation, usage, status, started).await
     }
 
     async fn authorize(
@@ -647,6 +763,14 @@ impl GatewayService {
         operation: &str,
         output_tokens: u32,
     ) -> Result<(), GatewayError> {
+        let model_scopes = principal
+            .scopes
+            .iter()
+            .filter_map(|scope| scope.strip_prefix("model:"))
+            .collect::<Vec<_>>();
+        if !model_scopes.is_empty() && !model_scopes.contains(&model) {
+            return Err(GatewayError::Policy(gateway_policy::PolicyError::Denied));
+        }
         self.policy
             .resolve(principal)
             .await?
@@ -843,9 +967,13 @@ impl GatewayService {
             .then(|| (security.clone(), principal.clone(), request_id)))
     }
 
-    fn routes(&self, model: &str) -> Result<Vec<ModelRoute>, GatewayError> {
+    fn routes(&self, principal: &Principal, model: &str) -> Result<Vec<ModelRoute>, GatewayError> {
         Ok(match &self.route_plan {
-            Some(plan) => plan.route(model)?,
+            Some(plan) => plan.route_for(
+                Some(&principal.tenant_id),
+                principal.project_id.as_deref(),
+                model,
+            )?,
             None => vec![self.router.resolve(model)?],
         })
     }
@@ -918,9 +1046,15 @@ async fn consume_stream(
         completion_tokens: output_bytes,
         estimated: true,
     });
-    let recorded = record_usage(&metering, &reservation, usage, status)
-        .await
-        .is_err();
+    let recorded = record_usage(
+        &metering,
+        &reservation,
+        usage,
+        status,
+        Some(started.elapsed().as_millis() as u64),
+    )
+    .await
+    .is_err();
     quota.release_counter(reservation.reservation_id).await;
     if recorded {
         let _ = sender.send(Err(GatewayError::Metering)).await;
@@ -1016,9 +1150,15 @@ async fn consume_inspected_stream(
         completion_tokens: output.len() as u64,
         estimated: true,
     });
-    let failed = record_usage(&metering, &reservation, usage, status)
-        .await
-        .is_err();
+    let failed = record_usage(
+        &metering,
+        &reservation,
+        usage,
+        status,
+        Some(started.elapsed().as_millis() as u64),
+    )
+    .await
+    .is_err();
     quota.release_counter(reservation.reservation_id).await;
     if failed {
         let _ = sender.send(Err(GatewayError::Metering)).await;
@@ -1066,6 +1206,7 @@ async fn record_usage(
     reservation: &QuotaReservation,
     usage: TokenUsage,
     status: UsageStatus,
+    latency_ms: Option<u64>,
 ) -> Result<(), gateway_metering::MeteringError> {
     let estimated_cost = metering
         .cost_for(
@@ -1091,6 +1232,7 @@ async fn record_usage(
                 usage,
                 estimated_cost,
                 status,
+                latency_ms,
                 occurred_at: Utc::now(),
             },
         )

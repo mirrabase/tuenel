@@ -31,8 +31,15 @@ pub trait GatewayStore: Send + Sync {
         &self,
         prefix: &str,
     ) -> Result<Option<VirtualKeyRecord>, StoreError>;
+    /// Record successful use without exposing or rewriting credential material.
+    async fn touch_virtual_key(&self, key_id: Uuid) -> Result<(), StoreError>;
     /// Revoke a key owned by a tenant. Returns whether a matching key exists.
-    async fn revoke_virtual_key(&self, tenant_id: &str, key_id: Uuid) -> Result<bool, StoreError>;
+    async fn revoke_virtual_key(
+        &self,
+        tenant_id: &str,
+        project_id: Option<&str>,
+        key_id: Uuid,
+    ) -> Result<bool, StoreError>;
     /// Atomically reserve quota. Returns false when the daily limit would be exceeded.
     async fn reserve_quota(&self, reservation: QuotaReservation) -> Result<bool, StoreError>;
     /// Atomically append usage and finalize its reservation. Duplicate request IDs are idempotent.

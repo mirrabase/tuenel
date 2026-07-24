@@ -273,7 +273,55 @@ impl ProviderHealthRepository for PostgresStore {
         provider_id: &str,
         health: ProviderHealth,
     ) -> Result<(), ProviderError> {
-        sqlx::query("INSERT INTO provider_health (provider_id,status,consecutive_failures,latest_success_at,latest_failure_at,updated_at) VALUES ($1,$2,$3,$4,$5,now()) ON CONFLICT (provider_id) DO UPDATE SET status=EXCLUDED.status,consecutive_failures=EXCLUDED.consecutive_failures,latest_success_at=EXCLUDED.latest_success_at,latest_failure_at=EXCLUDED.latest_failure_at,updated_at=now()").bind(provider_id).bind(match health.status{ProviderHealthStatus::Healthy=>"healthy",ProviderHealthStatus::Degraded=>"degraded",ProviderHealthStatus::Unhealthy=>"unhealthy",ProviderHealthStatus::Unknown=>"unknown"}).bind(i32::try_from(health.consecutive_failures).unwrap_or(i32::MAX)).bind(health.latest_success_at).bind(health.latest_failure_at).execute(&self.pool).await.map_err(|_|ProviderError::Transport).map(|_|())
+        let mut transaction = self
+            .pool
+            .begin()
+            .await
+            .map_err(|_| ProviderError::Transport)?;
+        sqlx::query(
+            "INSERT INTO providers (id,tenant_id,provider_type,base_url,enabled)
+             SELECT id,tenant_id,body->>'provider_type',body->>'base_url',enabled
+             FROM admin_resources
+             WHERE kind='providers' AND id=$1 AND retired_at IS NULL
+             ON CONFLICT (id) DO UPDATE SET
+               tenant_id=EXCLUDED.tenant_id,
+               provider_type=EXCLUDED.provider_type,
+               base_url=EXCLUDED.base_url,
+               enabled=EXCLUDED.enabled,
+               updated_at=now()",
+        )
+        .bind(provider_id)
+        .execute(&mut *transaction)
+        .await
+        .map_err(|_| ProviderError::Transport)?;
+        sqlx::query(
+            "INSERT INTO provider_health
+               (provider_id,status,consecutive_failures,latest_success_at,latest_failure_at,updated_at)
+             VALUES($1,$2,$3,$4,$5,now())
+             ON CONFLICT (provider_id) DO UPDATE SET
+               status=EXCLUDED.status,
+               consecutive_failures=EXCLUDED.consecutive_failures,
+               latest_success_at=EXCLUDED.latest_success_at,
+               latest_failure_at=EXCLUDED.latest_failure_at,
+               updated_at=now()",
+        )
+        .bind(provider_id)
+        .bind(match health.status {
+            ProviderHealthStatus::Healthy => "healthy",
+            ProviderHealthStatus::Degraded => "degraded",
+            ProviderHealthStatus::Unhealthy => "unhealthy",
+            ProviderHealthStatus::Unknown => "unknown",
+        })
+        .bind(i32::try_from(health.consecutive_failures).unwrap_or(i32::MAX))
+        .bind(health.latest_success_at)
+        .bind(health.latest_failure_at)
+        .execute(&mut *transaction)
+        .await
+        .map_err(|_| ProviderError::Transport)?;
+        transaction
+            .commit()
+            .await
+            .map_err(|_| ProviderError::Transport)
     }
 }
 

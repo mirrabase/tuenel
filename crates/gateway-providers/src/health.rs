@@ -48,17 +48,7 @@ impl ProviderHealthMonitor {
         loop {
             interval.tick().await;
             for id in self.registry.ids() {
-                if let Some(provider) = self.registry.get(id) {
-                    let health =
-                        match tokio::time::timeout(self.timeout, provider.health_check()).await {
-                            Ok(Ok(health)) => health,
-                            _ => ProviderHealth {
-                                status: ProviderHealthStatus::Unhealthy,
-                                consecutive_failures: 1,
-                                latest_success_at: None,
-                                latest_failure_at: Some(chrono::Utc::now()),
-                            },
-                        };
+                if let Ok(health) = self.registry.check_health(id, self.timeout).await {
                     let _ = self.repository.record_provider_health(id, health).await;
                 }
             }

@@ -1,7 +1,11 @@
 import assert from "node:assert/strict"
 import { test } from "node:test"
 
-import { GatewayApiError, readSse } from "../lib/gateway-api.ts"
+import {
+  GatewayApiError,
+  gatewayResponse,
+  readSse,
+} from "../lib/gateway-api.ts"
 import { hasValidOrigin } from "../lib/request-origin.ts"
 
 test("SSE reader handles split chunks and done sentinel", async () => {
@@ -25,6 +29,53 @@ test("gateway errors retain safe status and request correlation", () => {
   assert.equal(error.status, 409)
   assert.equal(error.code, "conflict")
   assert.equal(error.requestId, "request-1")
+})
+
+test("gateway requests never infer project scope from the browser URL", async () => {
+  const previousWindow = globalThis.window
+  const previousFetch = globalThis.fetch
+  let requested
+  globalThis.window = {
+    location: {
+      origin: "http://localhost:3000",
+      pathname:
+        "/en/01900000-0000-7000-8000-000000000001/project/01900000-0000-7000-8000-000000000002/models",
+    },
+  }
+  globalThis.fetch = async (input) => {
+    requested = new URL(input)
+    return new Response("{}", { status: 200 })
+  }
+  await gatewayResponse(
+    "/admin/projects?limit=10",
+    "01900000-0000-7000-8000-000000000001"
+  )
+  assert.equal(requested.searchParams.get("project_id"), null)
+  globalThis.window = previousWindow
+  globalThis.fetch = previousFetch
+})
+
+test("gateway requests forward an explicit project scope", async () => {
+  const previousWindow = globalThis.window
+  const previousFetch = globalThis.fetch
+  let requested
+  globalThis.window = { location: { origin: "http://localhost:3000" } }
+  globalThis.fetch = async (_input, init) => {
+    requested = new Headers(init.headers)
+    return new Response("{}", { status: 200 })
+  }
+  await gatewayResponse(
+    "/v1/models",
+    "01900000-0000-7000-8000-000000000001",
+    undefined,
+    "01900000-0000-7000-8000-000000000002"
+  )
+  assert.equal(
+    requested.get("x-tuenel-project-id"),
+    "01900000-0000-7000-8000-000000000002"
+  )
+  globalThis.window = previousWindow
+  globalThis.fetch = previousFetch
 })
 
 test("origin validation uses the public forwarded origin", () => {

@@ -36,3 +36,39 @@ test("every browser API is represented by the authenticated catch-all console", 
     ["/mcp"]
   )
 })
+
+test("organization APIs and project-key isolation are enforced by the backend", () => {
+  for (const route of [
+    "/admin/usage/breakdowns",
+    "/admin/provider-health",
+    "/admin/billing/overview",
+    "/admin/billing/invoices",
+    "/admin/providers/{id}/models",
+    "/auth/tenants/{tenant_id}",
+    "/auth/tenants/{tenant_id}/invitations",
+    "/auth/tenants/{tenant_id}/members/{user_id}",
+  ])
+    assert.ok(backendRoutes.includes(route), `${route} is not registered`)
+
+  const adminStore = readFileSync(
+    join(repoRoot, "stores/store-postgres/src/admin.rs"),
+    "utf8"
+  )
+  const keyStore = readFileSync(
+    join(repoRoot, "stores/store-postgres/src/lib.rs"),
+    "utf8"
+  )
+  assert.match(adminStore, /FROM virtual_keys WHERE[\s\S]*project_id=\$3/)
+  assert.match(
+    adminStore,
+    /OperationalView::ProviderHealth[\s\S]*provider_health\(self, query\)/
+  )
+  assert.match(
+    adminStore,
+    /u\.project_id=\$2[\s\S]*u\.provider=\$5[\s\S]*upstream_model=\$6/
+  )
+  assert.match(
+    keyStore,
+    /tenant_id = \$1 AND id = \$2 AND \(\$3::text IS NULL OR project_id = \$3\)/
+  )
+})

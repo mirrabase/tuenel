@@ -4,7 +4,7 @@ services:
     environment:
       POSTGRES_DB: ${POSTGRES_DB:-gateway}
       POSTGRES_USER: ${POSTGRES_USER:-gateway}
-      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-gateway}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?Set POSTGRES_PASSWORD in .env}
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-gateway} -d ${POSTGRES_DB:-gateway}"]
       interval: 2s
@@ -22,117 +22,33 @@ services:
       timeout: 3s
       retries: 30
 
-  mock-provider:
-    build: tests/mock-provider
-    environment:
-      MOCK_ISSUER: http://mock-provider:4010
-      MOCK_AUDIENCE: gateway
-      MOCK_TENANT: demo-tenant
-    ports:
-      - "4010:4010"
-    healthcheck:
-      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:4010/health')"]
-      interval: 2s
-      timeout: 3s
-      retries: 30
-
-  mock-anthropic:
-    build: tests/mock-provider
-    environment: { PORT: 4011 }
-    healthcheck:
-      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:4011/health')"]
-      interval: 2s
-      timeout: 3s
-      retries: 30
-
-  mock-gemini:
-    build: tests/mock-provider
-    environment: { PORT: 4012 }
-    healthcheck:
-      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:4012/health')"]
-      interval: 2s
-      timeout: 3s
-      retries: 30
-
-  mock-mcp-safe:
-    build: tests/mock-mcp
-    environment: { MCP_MODE: safe, PORT: 4020 }
-    healthcheck:
-      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:4020/health')"]
-      interval: 2s
-      timeout: 3s
-      retries: 30
-
-  mock-mcp-destructive:
-    build: tests/mock-mcp
-    environment: { MCP_MODE: destructive, PORT: 4020 }
-    healthcheck:
-      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:4020/health')"]
-      interval: 2s
-      timeout: 3s
-      retries: 30
-
-  mock-mcp-malicious:
-    build: tests/mock-mcp
-    environment: { MCP_MODE: malicious, PORT: 4020 }
-    healthcheck:
-      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:4020/health')"]
-      interval: 2s
-      timeout: 3s
-      retries: 30
-
-  mock-billing-webhook:
-    build: tests/mock-webhook
-    healthcheck:
-      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:4030/health')"]
-      interval: 2s
-      timeout: 3s
-      retries: 30
-
   gateway:
+    image: ghcr.io/omnimusha-suite/tuenel-gateway:${TUENEL_VERSION:-latest}
     build: .
     environment:
-      DATABASE_URL: ${DATABASE_URL:-postgres://gateway:gateway@postgres:5432/gateway}
-      REDIS_URL: ${REDIS_URL:-redis://redis:6379}
-      GATEWAY_CREDENTIALS_MASTER_KEY: ${GATEWAY_CREDENTIALS_MASTER_KEY:-MDEyMzQ1Njc4OWFiY2RlZjAxMjM0NTY3ODlhYmNkZWY=}
-      OIDC_ISSUER: ${OIDC_ISSUER:-http://mock-provider:4010}
-      OIDC_AUDIENCE: ${OIDC_AUDIENCE:-gateway}
-      OIDC_JWKS_URL: ${OIDC_JWKS_URL:-http://mock-provider:4010/jwks}
+      DATABASE_URL: ${DATABASE_URL:?Set DATABASE_URL in .env}
+      REDIS_URL: redis://redis:6379
+      GATEWAY_CREDENTIALS_MASTER_KEY: ${GATEWAY_CREDENTIALS_MASTER_KEY:?Set GATEWAY_CREDENTIALS_MASTER_KEY in .env}
+      OIDC_ISSUER: ${OIDC_ISSUER:-}
+      OIDC_AUDIENCE: ${OIDC_AUDIENCE:-}
+      OIDC_JWKS_URL: ${OIDC_JWKS_URL:-}
       OIDC_ADMIN_ROLE: ${OIDC_ADMIN_ROLE:-gateway_admin}
-      UPSTREAM_BASE_URL: ${UPSTREAM_BASE_URL:-http://mock-provider:4010/v1}
+      UPSTREAM_BASE_URL: ${UPSTREAM_BASE_URL:-}
       UPSTREAM_API_KEY: ${UPSTREAM_API_KEY:-}
-      UPSTREAM_MODEL: ${UPSTREAM_MODEL:-mock-model}
-      ANTHROPIC_BASE_URL: http://mock-anthropic:4011
-      ANTHROPIC_API_KEY: mock-anthropic-key
-      ANTHROPIC_MODEL: mock-anthropic-model
-      GEMINI_BASE_URL: http://mock-gemini:4012
-      GEMINI_API_KEY: mock-gemini-key
-      GEMINI_MODEL: mock-gemini-model
+      UPSTREAM_MODEL: ${UPSTREAM_MODEL:-}
       GATEWAY_MODEL_ALIAS: ${GATEWAY_MODEL_ALIAS:-gateway-default}
-      GATEWAY_BIND_ADDR: ${GATEWAY_BIND_ADDR:-0.0.0.0:8080}
+      GATEWAY_BIND_ADDR: 0.0.0.0:8080
       DEFAULT_VIRTUAL_KEY_DAILY_TOKENS: ${DEFAULT_VIRTUAL_KEY_DAILY_TOKENS:-100000}
-      RUST_LOG: ${RUST_LOG:-gateway=info,gatewayd=info}
+      RUST_LOG: ${RUST_LOG:-info}
       MCP_ENABLED: ${MCP_ENABLED:-true}
-      MCP_ALLOW_PRIVATE_HTTP_ENDPOINTS: ${MCP_ALLOW_PRIVATE_HTTP_ENDPOINTS:-true}
+      MCP_ALLOW_PRIVATE_HTTP_ENDPOINTS: "false"
     depends_on:
       postgres:
         condition: service_healthy
-      mock-provider:
-        condition: service_healthy
-      mock-anthropic:
-        condition: service_healthy
-      mock-gemini:
-        condition: service_healthy
       redis:
         condition: service_healthy
-      mock-mcp-safe:
-        condition: service_healthy
-      mock-mcp-destructive:
-        condition: service_healthy
-      mock-mcp-malicious:
-        condition: service_healthy
     ports:
-      - "8080:8080"
+      - "${GATEWAY_PORT:-8080}:8080"
     healthcheck:
       test: ["CMD", "curl", "--fail", "http://localhost:8080/ready"]
       interval: 2s
@@ -140,6 +56,7 @@ services:
       retries: 30
 
   gateway-web:
+    image: ghcr.io/omnimusha-suite/tuenel-gateway-web:${TUENEL_VERSION:-latest}
     build:
       context: ./apps/gateway-web
       dockerfile: Dockerfile
@@ -158,46 +75,6 @@ services:
       interval: 5s
       timeout: 3s
       retries: 20
-
-  bootstrap:
-    image: postgres:16-alpine
-    environment:
-      PGPASSWORD: ${POSTGRES_PASSWORD:-gateway}
-    command:
-      - sh
-      - -c
-      - >-
-        psql -h postgres -U ${POSTGRES_USER:-gateway} -d ${POSTGRES_DB:-gateway} -v ON_ERROR_STOP=1
-        -c "INSERT INTO tenants (id, name, daily_token_limit) VALUES ('demo-tenant','Demo tenant',1000000),('demo-other','Demo other',1000000) ON CONFLICT (id) DO NOTHING"
-    depends_on:
-      gateway:
-        condition: service_healthy
-
-  smoke:
-    image: python:3.12-slim
-    profiles: ["test"]
-    environment:
-      GATEWAY_URL: http://gateway:8080
-      MOCK_URL: http://mock-provider:4010
-    command: ["sh", "-c", "pip install --quiet openai && python /tests/openai_sdk_smoke.py"]
-    volumes:
-      - ./tests/compatibility:/tests:ro
-    depends_on:
-      bootstrap:
-        condition: service_completed_successfully
-
-  v03-smoke:
-    image: python:3.12-slim
-    profiles: ["test"]
-    environment:
-      GATEWAY_URL: http://gateway:8080
-      MOCK_URL: http://mock-provider:4010
-    command: ["python", "/tests/v03_flows.py"]
-    volumes:
-      - ./tests/integration:/tests:ro
-    depends_on:
-      bootstrap:
-        condition: service_completed_successfully
 
 volumes:
   gateway-postgres:

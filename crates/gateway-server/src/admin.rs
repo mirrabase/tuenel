@@ -6,7 +6,8 @@ use axum::{
     routing::{get, patch, post},
 };
 use gateway_admin::{AdminError, AdminService, ListQuery, Mutation, OperationalView, ResourceKind};
-use serde_json::Value;
+use gateway_providers::{ProviderError, ProviderHealthStatus};
+use serde_json::{Value, json};
 use uuid::Uuid;
 
 use super::{ApiError, AppState, RequestId, admin_principal};
@@ -19,6 +20,7 @@ pub(super) fn routes() -> Router<AppState> {
             patch(update_project).delete(retire_project),
         )
         .route("/admin/providers", get(providers).post(create_provider))
+        .route("/admin/providers/{id}/models", get(provider_models))
         .route(
             "/admin/providers/{id}",
             patch(update_provider).delete(retire_provider),
@@ -50,6 +52,8 @@ pub(super) fn routes() -> Router<AppState> {
         .route("/admin/usage/summary", get(usage_summary))
         .route("/admin/usage/series", get(usage_series))
         .route("/admin/usage/events", get(usage_events))
+        .route("/admin/usage/breakdowns", get(usage_breakdowns))
+        .route("/admin/provider-health", get(provider_health))
         .route("/admin/usage/reservations", get(reservations))
         .route("/admin/usage/mcp-invocations", get(mcp_invocations))
         .route("/admin/audit-events", get(audit_events))
@@ -57,6 +61,8 @@ pub(super) fn routes() -> Router<AppState> {
         .route("/admin/system", get(system))
         .route("/admin/billing/webhooks", get(billing_webhooks))
         .route("/admin/billing/outbox", get(billing_outbox))
+        .route("/admin/billing/overview", get(billing_overview))
+        .route("/admin/billing/invoices", get(billing_invoices))
         .route(
             "/admin/billing/outbox/{event_id}/retry",
             post(retry_billing),
@@ -195,12 +201,16 @@ operational!(virtual_keys, OperationalView::VirtualKeys);
 operational!(usage_summary, OperationalView::UsageSummary);
 operational!(usage_series, OperationalView::UsageSeries);
 operational!(usage_events, OperationalView::UsageEvents);
+operational!(usage_breakdowns, OperationalView::UsageBreakdowns);
+operational!(provider_health, OperationalView::ProviderHealth);
 operational!(reservations, OperationalView::Reservations);
 operational!(mcp_invocations, OperationalView::McpInvocations);
 operational!(audit_events, OperationalView::AuditEvents);
 operational!(summary, OperationalView::Summary);
 operational!(billing_webhooks, OperationalView::BillingWebhooks);
 operational!(billing_outbox, OperationalView::BillingOutbox);
+operational!(billing_overview, OperationalView::BillingOverview);
+operational!(billing_invoices, OperationalView::BillingInvoices);
 
 async fn system(
     State(state): State<AppState>,
@@ -214,6 +224,8 @@ async fn system(
         .map_err(map_admin)?;
     value["runtime"] =
         serde_json::to_value(state.gateway.status()).map_err(|_| ApiError::internal())?;
+    value["otel_enabled"] = Value::Bool(std::env::var_os("OTEL_EXPORTER_OTLP_ENDPOINT").is_some());
+    value["deployment_mode"] = Value::String("standalone".into());
     Ok(Json(value))
 }
 
@@ -236,24 +248,62 @@ async fn check_provider(
     State(state): State<AppState>,
     Path(id): Path<String>,
     headers: HeaderMap,
-    Query(query): Query<ListQuery>,
 ) -> Result<Json<Value>, ApiError> {
-    let principal = admin_principal(&state, &headers).await?;
-    let mut value = admin(&state)?
-        .operational(&principal, OperationalView::System, query)
+    admin_principal(&state, &headers).await?;
+    let repository = state
+        .provider_health
+        .as_deref()
+        .ok_or_else(|| ApiError::service_unavailable("provider health unavailable"))?;
+    let health = state
+        .gateway
+        .check_provider(&id, repository)
         .await
-        .map_err(map_admin)?;
-    let provider = value
-        .get_mut("providers")
-        .and_then(Value::as_array_mut)
-        .and_then(|items| {
-            items
-                .iter()
-                .position(|item| item.get("provider_id").and_then(Value::as_str) == Some(&id))
-                .map(|index| items.remove(index))
-        })
-        .ok_or_else(|| ApiError::not_found("provider not found"))?;
-    Ok(Json(provider))
+        .map_err(|error| match error {
+            ProviderError::Unavailable => {
+                ApiError::not_found("provider is not active in the gateway runtime")
+            }
+            _ => ApiError::service_unavailable("provider health check unavailable"),
+        })?;
+    Ok(Json(json!({
+        "provider_id": id,
+        "status": match health.status {
+            ProviderHealthStatus::Healthy => "healthy",
+            ProviderHealthStatus::Degraded => "degraded",
+            ProviderHealthStatus::Unhealthy => "unhealthy",
+            ProviderHealthStatus::Unknown => "unknown",
+        },
+        "consecutive_failures": health.consecutive_failures,
+        "latest_success_at": health.latest_success_at,
+        "latest_failure_at": health.latest_failure_at,
+        "updated_at": chrono::Utc::now(),
+    })))
+}
+
+async fn provider_models(
+    State(state): State<AppState>,
+    Path(id): Path<String>,
+    headers: HeaderMap,
+) -> Result<Json<Value>, ApiError> {
+    admin_principal(&state, &headers).await?;
+    let models = state
+        .gateway
+        .list_provider_models(&id)
+        .await
+        .map_err(|error| match error {
+            ProviderError::Unavailable => {
+                ApiError::not_found("provider is not active in the gateway runtime")
+            }
+            ProviderError::Timeout => ApiError::new(
+                StatusCode::GATEWAY_TIMEOUT,
+                "server_error",
+                "upstream_timeout",
+                "provider model discovery timed out",
+            ),
+            _ => ApiError::service_unavailable("provider model discovery unavailable"),
+        })?;
+    Ok(Json(json!({
+        "data": models.into_iter().map(|id| json!({ "id": id })).collect::<Vec<_>>()
+    })))
 }
 
 async fn retry_billing(

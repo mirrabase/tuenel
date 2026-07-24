@@ -65,13 +65,22 @@ impl GatewayStore for MemoryStore {
         Ok(self.state.lock().await.keys.get(prefix).cloned())
     }
 
-    async fn revoke_virtual_key(&self, tenant_id: &str, key_id: Uuid) -> Result<bool, StoreError> {
+    async fn touch_virtual_key(&self, _: Uuid) -> Result<(), StoreError> {
+        Ok(())
+    }
+
+    async fn revoke_virtual_key(
+        &self,
+        tenant_id: &str,
+        project_id: Option<&str>,
+        key_id: Uuid,
+    ) -> Result<bool, StoreError> {
         let mut state = self.state.lock().await;
-        let Some(key) = state
-            .keys
-            .values_mut()
-            .find(|key| key.id == key_id && key.tenant_id == tenant_id)
-        else {
+        let Some(key) = state.keys.values_mut().find(|key| {
+            key.id == key_id
+                && key.tenant_id == tenant_id
+                && project_id.is_none_or(|project_id| key.project_id.as_deref() == Some(project_id))
+        }) else {
             return Ok(false);
         };
         key.revoked_at.get_or_insert_with(Utc::now);

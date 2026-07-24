@@ -48,6 +48,30 @@ impl ModelProvider for GeminiProvider {
             ..Default::default()
         }
     }
+    async fn list_models(&self) -> Result<Vec<String>, ProviderError> {
+        let endpoint = self
+            .base_url
+            .join("v1beta/models")
+            .map_err(|_| ProviderError::Protocol)?;
+        let response = self
+            .client
+            .get(endpoint)
+            .query(&[("key", self.api_key.expose_secret()), ("pageSize", "1000")])
+            .send()
+            .await
+            .map_err(map_error)?;
+        let status = response.status();
+        if !status.is_success() {
+            return Err(ProviderError::Upstream(status.as_u16()));
+        }
+        let response: GeminiModelList =
+            response.json().await.map_err(|_| ProviderError::Protocol)?;
+        Ok(response
+            .models
+            .into_iter()
+            .map(|model| model.base_model_id)
+            .collect())
+    }
     async fn infer(
         &self,
         context: ProviderContext,
@@ -164,6 +188,15 @@ struct GeminiResponse {
     usage: Option<GeminiUsage>,
 }
 #[derive(Deserialize)]
+struct GeminiModelList {
+    models: Vec<GeminiModel>,
+}
+#[derive(Deserialize)]
+struct GeminiModel {
+    #[serde(rename = "baseModelId")]
+    base_model_id: String,
+}
+#[derive(Deserialize)]
 struct GeminiCandidate {
     content: GeminiOutput,
 }
@@ -196,5 +229,17 @@ fn map_error(error: reqwest::Error) -> ProviderError {
         ProviderError::Timeout
     } else {
         ProviderError::Transport
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::GeminiModelList;
+
+    #[test]
+    fn parses_base_model_ids() {
+        let response: GeminiModelList =
+            serde_json::from_str(r#"{"models":[{"baseModelId":"gemini-test"}]}"#).unwrap();
+        assert_eq!(response.models[0].base_model_id, "gemini-test");
     }
 }

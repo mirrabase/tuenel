@@ -3,6 +3,7 @@
 use std::{fmt, sync::Arc};
 
 use async_trait::async_trait;
+use chrono::DateTime;
 use gateway_types::Principal;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
@@ -45,6 +46,8 @@ impl fmt::Display for ResourceKind {
 pub struct ListQuery {
     pub tenant_id: Option<String>,
     pub project_id: Option<String>,
+    pub provider_id: Option<String>,
+    pub model: Option<String>,
     pub status: Option<String>,
     pub query: Option<String>,
     pub cursor: Option<String>,
@@ -80,6 +83,8 @@ pub enum OperationalView {
     UsageSummary,
     UsageSeries,
     UsageEvents,
+    UsageBreakdowns,
+    ProviderHealth,
     Reservations,
     McpInvocations,
     AuditEvents,
@@ -87,6 +92,8 @@ pub enum OperationalView {
     System,
     BillingWebhooks,
     BillingOutbox,
+    BillingOverview,
+    BillingInvoices,
 }
 
 #[derive(Clone, Debug)]
@@ -381,6 +388,30 @@ impl AdminService {
         view: OperationalView,
         mut query: ListQuery,
     ) -> Result<Value, AdminError> {
+        let from = query
+            .from
+            .as_deref()
+            .map(DateTime::parse_from_rfc3339)
+            .transpose()
+            .map_err(|_| AdminError::Invalid)?;
+        let to = query
+            .to
+            .as_deref()
+            .map(DateTime::parse_from_rfc3339)
+            .transpose()
+            .map_err(|_| AdminError::Invalid)?;
+        if from.zip(to).is_some_and(|(from, to)| from > to) {
+            return Err(AdminError::Invalid);
+        }
+        for filter in [&mut query.provider_id, &mut query.model] {
+            *filter = filter
+                .take()
+                .map(|value| value.trim().to_owned())
+                .filter(|value| !value.is_empty());
+            if filter.as_ref().is_some_and(|value| value.len() > 255) {
+                return Err(AdminError::Invalid);
+            }
+        }
         let cross_tenant = matches!(
             view,
             OperationalView::Tenants | OperationalView::System | OperationalView::Summary
@@ -470,6 +501,9 @@ fn sanitize(mut mutation: Mutation) -> Mutation {
 
 fn redact(resource: &mut Value) {
     if let Some(object) = resource.as_object_mut() {
+        if object.contains_key("secret_ref") {
+            object.insert("credential_configured".into(), Value::Bool(true));
+        }
         object.remove("credential");
         object.remove("secret_ref");
         object.remove("secret_tenant_id");

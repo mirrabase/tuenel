@@ -3,7 +3,7 @@
 Manual end-to-end tests for `gateway-web`. Run them against `http://localhost:3000` after:
 
 ```powershell
-docker compose up -d --build
+docker compose --env-file .env.dev.example -f compose.yaml -f compose.dev.yaml up -d --build
 ```
 
 Create a fresh email per run. Tests marked **live** call the gateway through the BFF and must survive a page refresh. Tests marked **mock** verify the current browser fixture/reducer behavior; they are not persistence tests.

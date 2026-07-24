@@ -3,8 +3,9 @@
 mod web;
 
 pub use web::{
-    IdentityRepository, InvitationResult, LoginResult, Membership, SessionInfo, Signup, TenantRole,
-    WebAuthError, WebAuthService, WebUser,
+    IdentityRepository, InvitationResult, LoginResult, Membership, Organization,
+    OrganizationUpdate, PendingInvitation, SessionInfo, Signup, TenantRole, WebAuthError,
+    WebAuthService, WebUser,
 };
 
 use std::{sync::Arc, time::Duration};
@@ -30,14 +31,14 @@ pub trait Authenticator: Send + Sync {
 
 /// Combined JWT and Virtual Key authenticator.
 pub struct AuthService {
-    jwt: JwtAuthenticator,
+    jwt: Option<JwtAuthenticator>,
     keys: VirtualKeyService,
     web: Option<WebAuthService>,
 }
 
 impl AuthService {
     /// Construct an authentication chain.
-    pub fn new(jwt: JwtAuthenticator, keys: VirtualKeyService) -> Self {
+    pub fn new(jwt: Option<JwtAuthenticator>, keys: VirtualKeyService) -> Self {
         Self {
             jwt,
             keys,
@@ -71,7 +72,10 @@ impl Authenticator for AuthService {
                 .await
                 .map_err(|_| AuthError::Invalid)
         } else {
-            self.jwt.authenticate(credential).await
+            match &self.jwt {
+                Some(jwt) => jwt.authenticate(credential).await,
+                None => Err(AuthError::Invalid),
+            }
         }
     }
 }
@@ -227,13 +231,14 @@ mod tests {
 
     use axum::{Json, Router, routing::get};
     use base64::{Engine, engine::general_purpose::STANDARD};
+    use gateway_keys::VirtualKeyService;
     use gateway_store::{GatewayStore, TenantRecord};
     use jsonwebtoken::{Algorithm, EncodingKey, Header, encode};
     use serde::Serialize;
     use serde_json::json;
     use store_memory::MemoryStore;
 
-    use super::JwtAuthenticator;
+    use super::{AuthError, AuthService, Authenticator, JwtAuthenticator};
 
     const PRIVATE_KEY_DER: &str = "MIIEowIBAAKCAQEA7N8zu98SzxpVwjFjoELTaBf2RjS1yjl2IETux15nvtJNoDea+WY5iMBoWc0AcNGKl66fQ51pRbASe4SFJbxAFd6/PwuX0aMRK562orw+emHTqJA1w2FnAB+5sHr6f2FdX31RJ1sLrBrPoDDHPMrfatTsDkMxLlL3OglZ1kFkwxYDx/3+AjxQ4IK+rgPQWQ2SLDKSu35ZszlG42gi98d0ieY2x10vwQxgYJ56TQnLJXxF1JChHEnFSJ38r68PrJJDS3KmtdJ6AGkE6YjyAIefJGytfkHYEj8U1RLCh/Rrjj/HLe3TY0cZb7ZmnkqPQbRHik1nzULGjjwFPU5tqcV2DQIDAQABAoIBAGm3lm3PeiQPk13X0CiLGrJXG3Wq+cWXDrcJPO6jHjdmwflzR8nui1gS05/cpEk15B6dc3xoaT8Ofbk95HT6hzmbkAxxvqD0H+oxbD7GODZDqgUN08jvFFrUTfpLcLhgOp2vHwSrGFMIJklO6+UggEU8YVxeNbmAktGGsd8zkWaVdVKcCoOjEbNUveu8Br8XjA9VNheG5osdGiifMRtSvliIQWJbDkAqebbSvq8O3neudC5xskUFu3mxN4TKvyLoL6PB7kZOxcSVAXehrpba12uRswUnqNbmzctFfNzVYhjgXmvAzxjXbZ4eOKKF9HePwy9V4ot/eCytEgxuULZ9mssCgYEA/dVU3P2zK2Z23wHW/DyuD6U6w0F7+CZTk2+7Xh311xmxV786D2qmOL7xkosXlxoaX6fVHfwLSG8wdOuEjSl8VuhlUFk2/MD0EipYmbj+p3T2igfF8UV4tIN6STUA8S6l0Fy9AB9vjW/1OoalMXgwUs3Smljjs53W2GY68scURo8CgYEA7uTOlnIR4oFPsEiUNNOyJunpBQ5Wt6w5jMTn+eX5ANBQgvzF3GwUssXU2uS6K8KOKj3+OGNlX8ZfWGzR/oNaqLgX06GSE1Q4H7BJafD0Iep8YMzVHRk6sCOQmrzJNIBtWwIEiR5i589kDw8TodKrGBTdMmHxfU3nCiRFv113Z6MCgYAmSTAkqQuGR000s9VWdFyYtYZYfx8Qvc8rVNYBCynSiOiL4KcEPkTWGE7dmKc1PlWuCeWGQUb+ZO79I6z5kcFUZncpmFtH4l6uAr8caJ/YaDbreOKtUpozOAWQ1zLOLggKloJXa2ZrAfEOI9L01DkNtEfIyhGGPQ9z0m+fwNFZFwKBgQDtJ6/+olcm6QBXHHYky1O8VdHB9y4XQJ4RJRi1eJvtNt/2aUFzRMh3gPWCKDa5YncHcGuDRwlIPwJAIieF5piFjdv5eBgvoBfnPXZj+ZQiZ0n6Pt4B+R3N5kCTnH6R5DyrcCFYjhXZ0oSefnUa3KyFR5EfhyPZJRELfF7RTtROyQKBgA7UKRo0KS0TlOsOQ2UpYOGBrGFtvk23MPuQs/FZ4tXrv/Sdvu3e+GaL8cln/LCotCvXFamDj8F0UAVOZrw5dcQUQXVfhyuWdUFm5H8wKEC2sBlfNcuiWaRO6NRYc1ykmrmgwGU/jlgL4C2Qe4y1MGoOphX4GvoVKnfg2+nM9xlO";
     const PUBLIC_N: &str = "7N8zu98SzxpVwjFjoELTaBf2RjS1yjl2IETux15nvtJNoDea-WY5iMBoWc0AcNGKl66fQ51pRbASe4SFJbxAFd6_PwuX0aMRK562orw-emHTqJA1w2FnAB-5sHr6f2FdX31RJ1sLrBrPoDDHPMrfatTsDkMxLlL3OglZ1kFkwxYDx_3-AjxQ4IK-rgPQWQ2SLDKSu35ZszlG42gi98d0ieY2x10vwQxgYJ56TQnLJXxF1JChHEnFSJ38r68PrJJDS3KmtdJ6AGkE6YjyAIefJGytfkHYEj8U1RLCh_Rrjj_HLe3TY0cZb7ZmnkqPQbRHik1nzULGjjwFPU5tqcV2DQ";
@@ -298,5 +303,15 @@ mod tests {
         let principal = validator.authenticate(&token).await.unwrap();
         assert_eq!(principal.tenant_id, "tenant-a");
         assert_eq!(principal.user_id.as_deref(), Some("user-a"));
+    }
+
+    #[tokio::test]
+    async fn rejects_jwt_credentials_when_oidc_is_disabled() {
+        let store: Arc<dyn GatewayStore> = Arc::new(MemoryStore::new());
+        let authenticator = AuthService::new(None, VirtualKeyService::new(store));
+        assert!(matches!(
+            authenticator.authenticate("not-a-local-key").await,
+            Err(AuthError::Invalid)
+        ));
     }
 }
