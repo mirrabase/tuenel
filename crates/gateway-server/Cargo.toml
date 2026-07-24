@@ -26,6 +26,7 @@ gateway-security = { path = "../gateway-security" }
 gateway-store = { path = "../gateway-store" }
 gateway-types = { path = "../gateway-types" }
 http.workspace = true
+rust_decimal.workspace = true
 serde.workspace = true
 serde_json.workspace = true
 tokio.workspace = true

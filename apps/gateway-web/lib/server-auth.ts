@@ -78,3 +78,21 @@ export async function getSession(): Promise<Session | null> {
 export function gatewayApiUrl(path: string) {
   return `${gatewayUrl()}${path}`
 }
+
+export async function projectBelongsToTenant(
+  tenantId: string,
+  projectId: string
+) {
+  const credential = await sessionCredential()
+  if (!credential) return false
+  const response = await fetch(
+    `${gatewayApiUrl("/admin/projects")}?tenant_id=${encodeURIComponent(tenantId)}&project_id=${encodeURIComponent(projectId)}`,
+    {
+      headers: { authorization: `Bearer ${credential}.${tenantId}` },
+      cache: "no-store",
+    }
+  )
+  if (!response.ok) return false
+  const body = (await response.json()) as { data?: { id?: string }[] }
+  return body.data?.some((project) => project.id === projectId) ?? false
+}

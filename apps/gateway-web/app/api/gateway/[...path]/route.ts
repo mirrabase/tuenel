@@ -50,6 +50,7 @@ async function forward(
     "content-type",
     "if-match",
     "idempotency-key",
+    "x-tuenel-project-id",
   ]) {
     const value = request.headers.get(name)
     if (value) headers.set(name, value)

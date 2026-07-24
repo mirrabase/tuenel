@@ -1,6 +1,6 @@
 FROM node:22-bookworm-slim AS deps
 WORKDIR /app
-RUN corepack enable
+RUN corepack enable && corepack prepare pnpm@9.15.4 --activate
 COPY package.json pnpm-lock.yaml pnpm-workspace.yaml ./
 RUN pnpm install --frozen-lockfile
 
@@ -17,7 +17,9 @@ RUN useradd --system --uid 10001 nextjs
 COPY --from=builder --chown=nextjs:nextjs /app/.next/standalone ./
 COPY --from=builder --chown=nextjs:nextjs /app/.next/static ./.next/static
 COPY --from=builder --chown=nextjs:nextjs /app/public ./public
+COPY --chown=nextjs:nextjs docker-entrypoint.sh /usr/local/bin/docker-entrypoint.sh
 USER nextjs
 EXPOSE 3000
 ENV PORT=3000
+ENTRYPOINT ["docker-entrypoint.sh"]
 CMD ["node", "server.js"]

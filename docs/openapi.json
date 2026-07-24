@@ -85,6 +85,21 @@
         }
       }
     },
+    "/admin/billing/invoices": {
+      "get": {
+        "responses": {
+          "200": {
+            "description": "Success"
+          },
+          "401": {
+            "description": "Authentication required"
+          },
+          "403": {
+            "description": "Not authorized"
+          }
+        }
+      }
+    },
     "/admin/billing/outbox": {
       "get": {
         "responses": {
@@ -102,6 +117,21 @@
     },
     "/admin/billing/outbox/{event_id}/retry": {
       "post": {
+        "responses": {
+          "200": {
+            "description": "Success"
+          },
+          "401": {
+            "description": "Authentication required"
+          },
+          "403": {
+            "description": "Not authorized"
+          }
+        }
+      }
+    },
+    "/admin/billing/overview": {
+      "get": {
         "responses": {
           "200": {
             "description": "Success"
@@ -625,6 +655,21 @@
         }
       }
     },
+    "/admin/providers/{id}/models": {
+      "get": {
+        "responses": {
+          "200": {
+            "description": "Success"
+          },
+          "401": {
+            "description": "Authentication required"
+          },
+          "403": {
+            "description": "Not authorized"
+          }
+        }
+      }
+    },
     "/admin/quota-limits": {
       "get": {
         "responses": {
@@ -926,6 +971,36 @@
         }
       }
     },
+    "/admin/provider-health": {
+      "get": {
+        "responses": {
+          "200": {
+            "description": "Success"
+          },
+          "401": {
+            "description": "Authentication required"
+          },
+          "403": {
+            "description": "Not authorized"
+          }
+        }
+      }
+    },
+    "/admin/usage/breakdowns": {
+      "get": {
+        "responses": {
+          "200": {
+            "description": "Success"
+          },
+          "401": {
+            "description": "Authentication required"
+          },
+          "403": {
+            "description": "Not authorized"
+          }
+        }
+      }
+    },
     "/admin/usage/events": {
       "get": {
         "responses": {
@@ -1071,8 +1146,120 @@
         }
       }
     },
+    "/auth/tenants/{tenant_id}": {
+      "get": {
+        "responses": {
+          "200": {
+            "description": "Success"
+          },
+          "401": {
+            "description": "Authentication required"
+          },
+          "403": {
+            "description": "Not authorized"
+          }
+        }
+      },
+      "delete": {
+        "responses": {
+          "200": {
+            "description": "Success"
+          },
+          "401": {
+            "description": "Authentication required"
+          },
+          "403": {
+            "description": "Not authorized"
+          }
+        }
+      },
+      "patch": {
+        "responses": {
+          "200": {
+            "description": "Success"
+          },
+          "401": {
+            "description": "Authentication required"
+          },
+          "403": {
+            "description": "Not authorized"
+          }
+        }
+      }
+    },
+    "/auth/tenants/{tenant_id}/invitations": {
+      "get": {
+        "responses": {
+          "200": {
+            "description": "Success"
+          },
+          "401": {
+            "description": "Authentication required"
+          },
+          "403": {
+            "description": "Not authorized"
+          }
+        }
+      },
+      "post": {
+        "responses": {
+          "200": {
+            "description": "Success"
+          },
+          "401": {
+            "description": "Authentication required"
+          },
+          "403": {
+            "description": "Not authorized"
+          }
+        }
+      }
+    },
+    "/auth/tenants/{tenant_id}/invitations/{invitation_id}": {
+      "delete": {
+        "responses": {
+          "200": {
+            "description": "Success"
+          },
+          "401": {
+            "description": "Authentication required"
+          },
+          "403": {
+            "description": "Not authorized"
+          }
+        }
+      }
+    },
     "/auth/tenants/{tenant_id}/members": {
       "get": {
+        "responses": {
+          "200": {
+            "description": "Success"
+          },
+          "401": {
+            "description": "Authentication required"
+          },
+          "403": {
+            "description": "Not authorized"
+          }
+        }
+      }
+    },
+    "/auth/tenants/{tenant_id}/members/{user_id}": {
+      "delete": {
+        "responses": {
+          "200": {
+            "description": "Success"
+          },
+          "401": {
+            "description": "Authentication required"
+          },
+          "403": {
+            "description": "Not authorized"
+          }
+        }
+      },
+      "patch": {
         "responses": {
           "200": {
             "description": "Success"
@@ -1635,6 +1822,22 @@
         "type": "object",
         "description": "Tenant-scoped Virtual Key issuance request.",
         "properties": {
+          "allowed_models": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "Public aliases this key may call; empty defers to normal policy."
+          },
+          "daily_request_limit": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int64",
+            "description": "Optional daily request ceiling.",
+            "minimum": 0
+          },
           "daily_token_limit": {
             "type": [
               "integer",
@@ -1644,6 +1847,13 @@
             "description": "Daily token limit, or the configured default.",
             "minimum": 0
           },
+          "display_name": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Human-readable non-secret label."
+          },
           "expires_at": {
             "type": [
               "string",
@@ -1651,6 +1861,14 @@
             ],
             "format": "date-time",
             "description": "Optional expiration time."
+          },
+          "monthly_budget": {
+            "type": [
+              "number",
+              "null"
+            ],
+            "format": "double",
+            "description": "Optional monthly estimated-cost ceiling in USD."
           },
           "project_id": {
             "type": [

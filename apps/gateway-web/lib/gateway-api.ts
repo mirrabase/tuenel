@@ -21,13 +21,14 @@ export type Page<T> = { data: T[]; next_cursor: string | null }
 export async function gatewayResponse(
   path: string,
   tenantId: string,
-  init?: RequestInit
+  init?: RequestInit,
+  projectId?: string
 ) {
-  const separator = path.includes("?") ? "&" : "?"
-  const response = await fetch(
-    `/api/gateway${path}${separator}tenant=${encodeURIComponent(tenantId)}`,
-    init
-  )
+  const url = new URL(`/api/gateway${path}`, window.location.origin)
+  url.searchParams.set("tenant", tenantId)
+  const headers = new Headers(init?.headers)
+  if (projectId) headers.set("x-tuenel-project-id", projectId)
+  const response = await fetch(url, { ...init, headers })
   if (!response.ok) {
     const body = await response.json().catch(() => ({}))
     throw new GatewayApiError(
@@ -43,9 +44,10 @@ export async function gatewayResponse(
 export async function gatewayFetch<T>(
   path: string,
   tenantId: string,
-  init?: RequestInit
+  init?: RequestInit,
+  projectId?: string
 ): Promise<T> {
-  const response = await gatewayResponse(path, tenantId, init)
+  const response = await gatewayResponse(path, tenantId, init, projectId)
   if (response.status === 204) return undefined as T
   return response.json()
 }

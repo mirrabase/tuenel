@@ -42,6 +42,7 @@ impl VirtualKeyService {
             .to_string();
         let record = VirtualKeyRecord {
             id: Uuid::now_v7(),
+            display_name: input.display_name,
             lookup_prefix,
             secret_hash,
             tenant_id: input.tenant_id,
@@ -51,6 +52,9 @@ impl VirtualKeyService {
             expires_at: input.expires_at,
             revoked_at: None,
             daily_token_limit: input.daily_token_limit,
+            allowed_models: input.allowed_models,
+            daily_request_limit: input.daily_request_limit,
+            monthly_budget: input.monthly_budget,
         };
         self.store.insert_virtual_key(record.clone()).await?;
         Ok(IssuedVirtualKey {
@@ -74,22 +78,35 @@ impl VirtualKeyService {
         Argon2::default()
             .verify_password(secret.as_bytes(), &hash)
             .map_err(|_| KeyError::Invalid)?;
+        self.store.touch_virtual_key(record.id).await?;
+        let mut scopes = record.scopes;
+        scopes.extend(
+            record
+                .allowed_models
+                .iter()
+                .map(|model| format!("model:{model}")),
+        );
         Ok(Principal {
             principal_id: format!("virtual-key:{}", record.id),
             tenant_id: record.tenant_id,
             project_id: record.project_id,
             user_id: record.user_id,
             roles: Vec::new(),
-            scopes: record.scopes,
+            scopes,
             authentication_method: AuthenticationMethod::VirtualKey,
             virtual_key_id: Some(record.id),
         })
     }
 
     /// Revoke a tenant-owned key without revealing cross-tenant existence.
-    pub async fn revoke(&self, tenant_id: &str, key_id: Uuid) -> Result<bool, KeyError> {
+    pub async fn revoke(
+        &self,
+        tenant_id: &str,
+        project_id: Option<&str>,
+        key_id: Uuid,
+    ) -> Result<bool, KeyError> {
         self.store
-            .revoke_virtual_key(tenant_id, key_id)
+            .revoke_virtual_key(tenant_id, project_id, key_id)
             .await
             .map_err(Into::into)
     }
@@ -164,11 +181,15 @@ mod tests {
         let issued = service
             .issue(NewVirtualKey {
                 tenant_id: "tenant-a".into(),
+                display_name: Some("test".into()),
                 project_id: None,
                 user_id: Some("user-a".into()),
                 scopes: vec!["chat".into()],
                 expires_at: None,
                 daily_token_limit: 1_000,
+                allowed_models: vec!["gateway-default".into()],
+                daily_request_limit: Some(100),
+                monthly_budget: None,
             })
             .await
             .unwrap();
@@ -178,12 +199,68 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(principal.tenant_id, "tenant-a");
-        assert!(service.revoke("tenant-a", issued.record.id).await.unwrap());
+        assert!(
+            principal
+                .scopes
+                .contains(&"model:gateway-default".to_owned())
+        );
+        assert!(
+            service
+                .revoke("tenant-a", None, issued.record.id)
+                .await
+                .unwrap()
+        );
         assert!(
             service
                 .authenticate(issued.plaintext.expose())
                 .await
                 .is_err()
+        );
+    }
+
+    #[tokio::test]
+    async fn project_revocation_cannot_cross_project_boundary() {
+        let store = Arc::new(MemoryStore::new());
+        store
+            .insert_tenant(TenantRecord {
+                id: "tenant-a".into(),
+                daily_token_limit: 10_000,
+            })
+            .await
+            .unwrap();
+        let service = VirtualKeyService::new(store);
+        let issued = service
+            .issue(NewVirtualKey {
+                tenant_id: "tenant-a".into(),
+                display_name: Some("project-a".into()),
+                project_id: Some("project-a".into()),
+                user_id: None,
+                scopes: vec!["inference".into()],
+                expires_at: None,
+                daily_token_limit: 1_000,
+                allowed_models: Vec::new(),
+                daily_request_limit: None,
+                monthly_budget: None,
+            })
+            .await
+            .unwrap();
+        assert!(
+            !service
+                .revoke("tenant-a", Some("project-b"), issued.record.id)
+                .await
+                .unwrap()
+        );
+        assert!(
+            service
+                .authenticate(issued.plaintext.expose())
+                .await
+                .is_ok()
+        );
+        assert!(
+            service
+                .revoke("tenant-a", Some("project-a"), issued.record.id)
+                .await
+                .unwrap()
         );
     }
 }

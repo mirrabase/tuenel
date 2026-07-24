@@ -181,13 +181,16 @@ function ResourcePage({
   path,
   mutable,
 }: ResourceConfig) {
-  const { tenantId, tenantRole, gatewayAdmin } = useGateway()
-  const state = useGatewayData<Page<RecordValue>>(path)
+  const { tenantId, tenantRole, gatewayAdmin, projectId } = useGateway()
+  const scopedPath = projectId
+    ? `${path}?tenant_id=${tenantId}&project_id=${projectId}`
+    : path
+  const state = useGatewayData<Page<RecordValue>>(scopedPath)
   const [editor, setEditor] = React.useState<RecordValue | "new" | null>(null)
   const [retiring, setRetiring] = React.useState<RecordValue | null>(null)
   const [submitting, setSubmitting] = React.useState(false)
   const [formError, setFormError] = React.useState("")
-  const global = kind ? globalKinds.has(kind) : false
+  const global = kind ? globalKinds.has(kind) && !projectId : false
   const canWrite =
     Boolean(kind) &&
     (global
@@ -216,7 +219,8 @@ function ResourcePage({
         kind,
         new FormData(event.currentTarget),
         tenantId,
-        editing
+        editing,
+        projectId
       )
       const id = editing ? String(editor.id) : ""
       await gatewayFetch(editing ? `${path}/${id}` : path, tenantId, {
@@ -262,7 +266,6 @@ function ResourcePage({
     <>
       <PageHeader
         title={title}
-        description={description}
         action={
           mutable &&
           canWrite && (
@@ -458,12 +461,33 @@ function ResourceForm({
 
 function ProjectForm({ record }: { record?: RecordValue }) {
   return (
-    <TextField
-      name="name"
-      label="Project name"
-      defaultValue={record?.name}
-      required
-    />
+    <>
+      <TextField
+        name="name"
+        label="Project name"
+        defaultValue={record?.name}
+        required
+      />
+      <SelectField
+        name="status"
+        label="Status"
+        defaultValue={record?.status ?? "active"}
+        options={[
+          ["active", "Active"],
+          ["inactive", "Inactive"],
+        ]}
+      />
+      <SelectField
+        name="environment"
+        label="Environment"
+        defaultValue={String(record?.environment ?? "production")}
+        options={[
+          ["production", "Production"],
+          ["staging", "Staging"],
+          ["development", "Development"],
+        ]}
+      />
+    </>
   )
 }
 
@@ -738,12 +762,16 @@ function ScopeFields({
   record?: RecordValue
   tenantId: string
 }) {
+  const { projectId } = useGateway()
+  const scopeId = projectId ?? tenantId
   return (
     <div className="grid gap-4 sm:grid-cols-2">
       <SelectField
         name="scope_kind"
         label="Scope"
-        defaultValue={String(record?.scope_kind ?? "tenant")}
+        defaultValue={String(
+          record?.scope_kind ?? (projectId ? "project" : "tenant")
+        )}
         options={[
           ["global", "Global"],
           ["tenant", "Tenant"],
@@ -755,7 +783,7 @@ function ScopeFields({
       <TextField
         name="scope_id"
         label="Scope ID"
-        defaultValue={record?.scope_id ?? tenantId}
+        defaultValue={record?.scope_id ?? scopeId}
         required
       />
     </div>
@@ -769,10 +797,15 @@ function ProviderField({
   name: string
   defaultValue?: unknown
 }) {
-  const providers = useGatewayData<Page<RecordValue>>("/admin/providers")
+  const { tenantId, projectId } = useGateway()
+  const providers = useGatewayData<Page<RecordValue>>(
+    projectId ? `/admin/providers?tenant_id=${tenantId}` : "/admin/providers"
+  )
   const options =
     providers.data?.data
-      .filter((provider) => provider.tenant_id == null)
+      .filter((provider) =>
+        projectId ? provider.tenant_id === tenantId : provider.tenant_id == null
+      )
       .map(
         (provider) =>
           [String(provider.id), String(provider.name ?? provider.id)] as [
@@ -934,10 +967,7 @@ function SystemPage() {
   const state = useGatewayData<RecordValue>("/admin/system")
   return (
     <>
-      <PageHeader
-        title="System"
-        description="Readiness, runtime reconciliation, provider health, and partial-state flags."
-      />
+      <PageHeader title="System" />
       <DataState
         loading={state.loading}
         error={state.error}
@@ -965,10 +995,7 @@ function IntegrationsPage() {
   const outbox = useGatewayData<Page<RecordValue>>("/admin/billing/outbox")
   return (
     <>
-      <PageHeader
-        title="Billing integrations"
-        description="Sanitized webhook configuration and non-blocking delivery outbox."
-      />
+      <PageHeader title="Billing integrations" />
       <RecordCards title="Webhooks" state={webhooks} />
       <div className="mt-4">
         <RecordCards

@@ -30,10 +30,7 @@ type SecurityRecord = Record<string, unknown> & {
 export function SecurityPoliciesPage() {
   return (
     <>
-      <PageHeader
-        title="Security policies"
-        description="Durable policy enforcement and custom detector patterns."
-      />
+      <PageHeader title="Security policies" />
       <Tabs defaultValue="policies">
         <TabsList>
           <TabsTrigger value="policies">Policies</TabsTrigger>
@@ -84,10 +81,7 @@ export function SecurityOperationsPage() {
   const events = useGatewayData<Page<SecurityRecord>>("/admin/security/events")
   return (
     <>
-      <PageHeader
-        title="Security operations"
-        description="Incidents, findings, and immutable security events."
-      />
+      <PageHeader title="Security operations" />
       <Tabs defaultValue="incidents">
         <TabsList>
           <TabsTrigger value="incidents">Incidents</TabsTrigger>

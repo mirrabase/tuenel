@@ -53,7 +53,13 @@ const compact = (value) =>
     Object.entries(value).filter(([, item]) => item !== undefined)
   )
 
-export function buildResourcePayload(kind, data, tenantId, editing = false) {
+export function buildResourcePayload(
+  kind,
+  data,
+  tenantId,
+  editing = false,
+  projectId
+) {
   switch (kind) {
     case "projects":
       return compact({
@@ -74,13 +80,15 @@ export function buildResourcePayload(kind, data, tenantId, editing = false) {
       })
     }
     case "routing":
-      return {
+      return compact({
+        tenant_id: projectId && !editing ? tenantId : undefined,
+        project_id: projectId,
         provider: required(data, "provider", "Provider"),
         requested_model: required(data, "requested_model", "Requested model"),
         upstream_model: required(data, "upstream_model", "Upstream model"),
         priority: positiveInteger(data, "priority", "Priority"),
         enabled: data.get("enabled") === "on",
-      }
+      })
     case "pricing": {
       const effectiveFrom = optionalIso(data, "effective_from")
       const effectiveUntil = optionalIso(data, "effective_until")

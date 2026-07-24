@@ -24,14 +24,16 @@ export default async function TenantLayout({
   return (
     <GatewayProvider
       session={{
+        userId: session.user_id,
         email: session.email,
         tenantId,
         tenantName: membership.tenant_name,
         tenantRole: membership.role,
         gatewayAdmin: session.gateway_admin,
+        memberships: session.memberships,
       }}
     >
-      <ConsoleShell scoped>{children}</ConsoleShell>
+      <ConsoleShell>{children}</ConsoleShell>
     </GatewayProvider>
   )
 }

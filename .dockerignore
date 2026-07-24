@@ -5,3 +5,4 @@
 /apps/gateway-web/.next
 .env
 *.log
+rust-toolchain.toml

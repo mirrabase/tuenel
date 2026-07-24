@@ -17,7 +17,8 @@ use gateway_metering::{MeteringService, Pricing};
 use gateway_policy::PolicyResolver;
 use gateway_pricing::PricingCatalog;
 use gateway_providers::{
-    ModelProvider, ProviderHealthMonitor, ProviderHealthRepository, ProviderRegistry,
+    GatewayStream, ModelProvider, ProviderContext, ProviderError, ProviderHealthMonitor,
+    ProviderHealthRepository, ProviderRegistry,
 };
 use gateway_quota::QuotaService;
 use gateway_routing::{RoutePlan, RouteTarget, StaticRouter};
@@ -25,7 +26,10 @@ use gateway_secrets::{SecretRepository, SecretService};
 use gateway_security::{SecurityEnforcer, SecurityInspector, SecurityPipeline, SecurityRepository};
 use gateway_server::AppState;
 use gateway_store::GatewayStore;
-use gateway_types::{McpTransportType, SecretRef, TokenUsage, UsageEvent, UsageStatus};
+use gateway_types::{
+    GatewayRequest, GatewayResponse, McpTransportType, SecretRef, TokenUsage, UsageEvent,
+    UsageStatus,
+};
 use provider_anthropic::AnthropicProvider;
 use provider_gemini::GeminiProvider;
 use provider_openai_compatible::OpenAiCompatibleProvider;
@@ -46,39 +50,33 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
 
     gateway_observability::init()?;
     let settings = Settings::from_env()?;
+    if let Some(warning) = settings.development_secret_warning() {
+        tracing::warn!("{warning}");
+    }
     let postgres = Arc::new(PostgresStore::connect(settings.database_url.expose_secret()).await?);
+    tracing::info!("PostgreSQL connected and migrations applied");
     let store: Arc<dyn GatewayStore> = postgres.clone();
     let keys = VirtualKeyService::new(store.clone());
-    let jwt = JwtAuthenticator::new(
+    let jwt = match (
         settings.oidc_issuer.clone(),
         settings.oidc_audience.clone(),
-        settings.oidc_jwks_url.to_string(),
-        store.clone(),
-    )
-    .await?;
+        settings.oidc_jwks_url.clone(),
+    ) {
+        (Some(issuer), Some(audience), Some(jwks_url)) => Some(
+            JwtAuthenticator::new(issuer, audience, jwks_url.to_string(), store.clone()).await?,
+        ),
+        _ => {
+            tracing::info!(
+                "OIDC is not configured; local sessions and virtual keys remain enabled"
+            );
+            None
+        }
+    };
     let web_auth = WebAuthService::new(
         postgres.clone() as Arc<dyn IdentityRepository>,
         Duration::from_secs(12 * 60 * 60),
     );
     let authenticator = Arc::new(AuthService::new(jwt, keys.clone()).with_web(web_auth.clone()));
-    let openai: Arc<dyn ModelProvider> = Arc::new(OpenAiCompatibleProvider::new(
-        "openai-compatible".into(),
-        settings.upstream_base_url.clone(),
-        settings.upstream_api_key.clone(),
-        settings.request_timeout,
-    )?);
-    postgres
-        .upsert_provider(
-            "openai-compatible",
-            "openai_compatible",
-            settings.upstream_base_url.as_str(),
-        )
-        .await?;
-    let router = StaticRouter::new(
-        "openai-compatible".into(),
-        settings.model_alias.clone(),
-        settings.upstream_model.clone(),
-    );
     let pricing = Pricing {
         input_per_million: settings.input_cost_per_million,
         output_per_million: settings.output_cost_per_million,
@@ -92,14 +90,31 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     redis.ping().await?;
     let quota =
         QuotaService::new(store.clone(), settings.reservation_ttl).with_counter(redis.clone());
-    let mut providers = vec![openai];
-    let mut targets = vec![RouteTarget {
-        provider: "openai-compatible".into(),
-        requested_model: settings.model_alias.clone(),
-        upstream_model: settings.upstream_model.clone(),
-        priority: 1,
-        enabled: true,
-    }];
+    let mut providers: Vec<Arc<dyn ModelProvider>> = Vec::new();
+    let mut targets = Vec::new();
+    if let (Some(base_url), Some(model)) = (
+        settings.upstream_base_url.clone(),
+        settings.upstream_model.clone(),
+    ) {
+        postgres
+            .upsert_provider("openai-compatible", "openai_compatible", base_url.as_str())
+            .await?;
+        providers.push(Arc::new(OpenAiCompatibleProvider::new(
+            "openai-compatible".into(),
+            base_url,
+            settings.upstream_api_key.clone(),
+            settings.request_timeout,
+        )?));
+        targets.push(RouteTarget {
+            tenant_id: None,
+            project_id: None,
+            provider: "openai-compatible".into(),
+            requested_model: settings.model_alias.clone(),
+            upstream_model: model,
+            priority: 1,
+            enabled: true,
+        });
+    }
     if let (Some(key), Some(model)) = (
         settings.anthropic_api_key.clone(),
         settings.anthropic_model.clone(),
@@ -118,6 +133,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
             settings.request_timeout,
         )?));
         targets.push(RouteTarget {
+            tenant_id: None,
+            project_id: None,
             provider: "anthropic".into(),
             requested_model: settings.model_alias.clone(),
             upstream_model: model,
@@ -139,6 +156,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
             settings.request_timeout,
         )?));
         targets.push(RouteTarget {
+            tenant_id: None,
+            project_id: None,
             provider: "gemini".into(),
             requested_model: settings.model_alias.clone(),
             upstream_model: model,
@@ -151,7 +170,14 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
         let (provider_type, base_url) = match id {
             "anthropic" => ("anthropic", settings.anthropic_base_url.as_str()),
             "gemini" => ("gemini", settings.gemini_base_url.as_str()),
-            _ => ("openai_compatible", settings.upstream_base_url.as_str()),
+            _ => (
+                "openai_compatible",
+                settings
+                    .upstream_base_url
+                    .as_ref()
+                    .expect("OpenAI-compatible provider has a base URL")
+                    .as_str(),
+            ),
         };
         postgres
             .bootstrap_runtime_resource(
@@ -208,9 +234,22 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
         incidents.clone(),
     )
     .with_enabled(settings.security_enabled);
-    let gateway = GatewayRuntime::new(
+    let service = if targets.is_empty() {
+        tracing::info!("no model provider configured; complete setup in the web console");
+        setup_gateway(
+            &settings,
+            policy.clone(),
+            quota.clone(),
+            metering.clone(),
+            security_enforcer.clone(),
+        )?
+    } else {
         GatewayService::configured(
-            router,
+            StaticRouter::new(
+                targets[0].provider.clone(),
+                targets[0].requested_model.clone(),
+                targets[0].upstream_model.clone(),
+            ),
             RoutePlan::new(targets)?,
             provider_registry,
             policy.clone(),
@@ -218,8 +257,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
             metering.clone(),
             settings.request_timeout,
         )?
-        .with_security(security_enforcer.clone()),
-    );
+        .with_security(security_enforcer.clone())
+    };
+    let gateway = GatewayRuntime::new(service);
     tokio::spawn(reconcile_expired(store.clone(), metering.clone()));
 
     let secret_repository: Arc<dyn SecretRepository> = postgres.clone();
@@ -290,6 +330,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
         gateway,
         keys,
         store,
+        provider_health: Some(postgres.clone() as Arc<dyn ProviderHealthRepository>),
         admin_role: settings.oidc_admin_role.clone(),
         max_output_tokens: settings.max_output_tokens,
         default_output_tokens: settings.default_output_tokens,
@@ -522,6 +563,12 @@ async fn build_runtime(
                     .and_then(|value| value.try_into().ok())
                     .ok_or_else(|| "invalid route priority".to_owned())?;
                 targets.push(RouteTarget {
+                    tenant_id: resource.tenant_id.clone(),
+                    project_id: resource
+                        .body
+                        .get("project_id")
+                        .and_then(serde_json::Value::as_str)
+                        .map(str::to_owned),
                     provider: text(&resource.body, "provider")?.to_owned(),
                     requested_model: text(&resource.body, "requested_model")?.to_owned(),
                     upstream_model: text(&resource.body, "upstream_model")?.to_owned(),
@@ -537,6 +584,10 @@ async fn build_runtime(
         }
     }
     targets.sort_by_key(|target| target.priority);
+    if targets.is_empty() {
+        return setup_gateway(settings, policy, quota, metering, security)
+            .map_err(|error| error.to_string());
+    }
     let first = targets
         .iter()
         .find(|target| target.enabled)
@@ -588,6 +639,64 @@ async fn runtime_credential(
     })
 }
 
+fn setup_gateway(
+    settings: &Settings,
+    policy: Arc<dyn PolicyResolver>,
+    quota: QuotaService,
+    metering: MeteringService,
+    security: SecurityEnforcer,
+) -> Result<GatewayService, gateway_core::GatewayError> {
+    let provider: Arc<dyn ModelProvider> = Arc::new(SetupProvider);
+    let target = RouteTarget {
+        tenant_id: None,
+        project_id: None,
+        provider: provider.id().to_owned(),
+        requested_model: settings.model_alias.clone(),
+        upstream_model: "unconfigured".into(),
+        priority: 1,
+        enabled: true,
+    };
+    GatewayService::configured(
+        StaticRouter::new(
+            target.provider.clone(),
+            target.requested_model.clone(),
+            target.upstream_model.clone(),
+        ),
+        RoutePlan::new(vec![target])?,
+        ProviderRegistry::new([provider]),
+        policy,
+        quota,
+        metering,
+        settings.request_timeout,
+    )
+    .map(|gateway| gateway.with_security(security))
+}
+
+struct SetupProvider;
+
+#[async_trait::async_trait]
+impl ModelProvider for SetupProvider {
+    fn id(&self) -> &str {
+        "__setup__"
+    }
+
+    async fn execute(
+        &self,
+        _context: ProviderContext,
+        _request: GatewayRequest,
+    ) -> Result<GatewayResponse, ProviderError> {
+        Err(ProviderError::Unavailable)
+    }
+
+    async fn stream(
+        &self,
+        _context: ProviderContext,
+        _request: GatewayRequest,
+    ) -> Result<GatewayStream, ProviderError> {
+        Err(ProviderError::Unavailable)
+    }
+}
+
 fn text<'a>(body: &'a serde_json::Value, field: &str) -> Result<&'a str, String> {
     body.get(field)
         .and_then(serde_json::Value::as_str)
@@ -631,6 +740,7 @@ async fn reconcile_expired(store: Arc<dyn GatewayStore>, metering: MeteringServi
                     )
                     .await,
                 status: UsageStatus::Interrupted,
+                latency_ms: None,
                 occurred_at: Utc::now(),
             };
             if metering.finalize(&reservation, event).await.is_err() {

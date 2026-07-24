@@ -8,6 +8,7 @@ use eventsource_stream::Eventsource;
 use futures::StreamExt;
 use gateway_providers::{
     GatewayStream, ModelProvider, ProviderCapabilities, ProviderContext, ProviderError,
+    ProviderHealth, ProviderHealthStatus,
 };
 use gateway_types::{
     GatewayEmbeddingRequest, GatewayEmbeddingResponse, GatewayInferenceRequest, GatewayMessage,
@@ -23,6 +24,7 @@ pub struct OpenAiCompatibleProvider {
     endpoint: Url,
     responses_endpoint: Url,
     embeddings_endpoint: Url,
+    models_endpoint: Url,
     api_key: Option<SecretString>,
     client: reqwest::Client,
 }
@@ -48,6 +50,9 @@ impl OpenAiCompatibleProvider {
         let embeddings_endpoint = base_url
             .join("embeddings")
             .map_err(|_| ProviderError::Protocol)?;
+        let models_endpoint = base_url
+            .join("models")
+            .map_err(|_| ProviderError::Protocol)?;
         let client = reqwest::Client::builder()
             .connect_timeout(Duration::from_secs(10))
             .timeout(timeout)
@@ -58,6 +63,7 @@ impl OpenAiCompatibleProvider {
             endpoint,
             responses_endpoint,
             embeddings_endpoint,
+            models_endpoint,
             api_key,
             client,
         })
@@ -94,6 +100,33 @@ impl ModelProvider for OpenAiCompatibleProvider {
             usage_in_stream: true,
             ..ProviderCapabilities::default()
         }
+    }
+
+    async fn health_check(&self) -> Result<ProviderHealth, ProviderError> {
+        let request = self.client.get(self.models_endpoint.clone());
+        let request = match &self.api_key {
+            Some(key) => request.bearer_auth(key.expose_secret()),
+            None => request,
+        };
+        require_success(request.send().await.map_err(map_reqwest)?).await?;
+        Ok(ProviderHealth {
+            status: ProviderHealthStatus::Healthy,
+            consecutive_failures: 0,
+            latest_success_at: Some(chrono::Utc::now()),
+            latest_failure_at: None,
+        })
+    }
+
+    async fn list_models(&self) -> Result<Vec<String>, ProviderError> {
+        let request = self.client.get(self.models_endpoint.clone());
+        let request = match &self.api_key {
+            Some(key) => request.bearer_auth(key.expose_secret()),
+            None => request,
+        };
+        let response = require_success(request.send().await.map_err(map_reqwest)?).await?;
+        let response: ProviderModelList =
+            response.json().await.map_err(|_| ProviderError::Protocol)?;
+        Ok(response.data.into_iter().map(|model| model.id).collect())
     }
 
     async fn infer(
@@ -431,6 +464,16 @@ struct ProviderResponse {
 }
 
 #[derive(Debug, Deserialize)]
+struct ProviderModelList {
+    data: Vec<ProviderModel>,
+}
+
+#[derive(Debug, Deserialize)]
+struct ProviderModel {
+    id: String,
+}
+
+#[derive(Debug, Deserialize)]
 struct ProviderChoice {
     message: ProviderResponseMessage,
     finish_reason: Option<String>,
@@ -498,9 +541,14 @@ fn map_reqwest(error: reqwest::Error) -> ProviderError {
 
 #[cfg(test)]
 mod tests {
-    use axum::{Router, http::header::CONTENT_TYPE, response::IntoResponse, routing::post};
+    use axum::{
+        Router,
+        http::header::CONTENT_TYPE,
+        response::IntoResponse,
+        routing::{get, post},
+    };
     use futures::StreamExt;
-    use gateway_providers::{ModelProvider, ProviderContext};
+    use gateway_providers::{ModelProvider, ProviderContext, ProviderHealthStatus};
     use gateway_types::{
         GatewayMessage, GatewayRequest, GatewayStreamEvent, GenerationParameters, MessageRole,
     };
@@ -564,6 +612,33 @@ mod tests {
         assert_eq!(response.content, "hi");
         assert_eq!(response.model, "gateway-default");
         assert!(!response.usage.estimated);
+    }
+
+    #[tokio::test]
+    async fn checks_provider_health_against_models_endpoint() {
+        let app = Router::new().route(
+            "/v1/models",
+            get(|| async { axum::Json(serde_json::json!({"data": []})) }),
+        );
+        let health = provider(app).await.health_check().await.unwrap();
+        assert_eq!(health.status, ProviderHealthStatus::Healthy);
+        assert!(health.latest_success_at.is_some());
+    }
+
+    #[tokio::test]
+    async fn lists_upstream_models() {
+        let app = Router::new().route(
+            "/v1/models",
+            get(|| async {
+                axum::Json(serde_json::json!({
+                    "data": [{"id": "model-b"}, {"id": "model-a"}]
+                }))
+            }),
+        );
+        assert_eq!(
+            provider(app).await.list_models().await.unwrap(),
+            ["model-b", "model-a"]
+        );
     }
 
     #[tokio::test]

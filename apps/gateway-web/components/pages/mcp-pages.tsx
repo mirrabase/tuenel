@@ -49,7 +49,7 @@ type McpRecord = Record<string, unknown> & {
 }
 
 export function McpRegistryPage() {
-  const { tenantId } = useGateway()
+  const { tenantId, projectId } = useGateway()
   const state = useGatewayData<Page<McpRecord>>("/admin/mcp/servers")
   const [name, setName] = React.useState("")
   const [endpoint, setEndpoint] = React.useState("")
@@ -66,10 +66,7 @@ export function McpRegistryPage() {
 
   return (
     <>
-      <PageHeader
-        title="MCP registry"
-        description="Durable MCP servers, discovery, and health checks."
-      />
+      <PageHeader title="MCP registry" />
       <Card className="mb-4">
         <CardHeader>
           <CardTitle>Register HTTP server</CardTitle>
@@ -89,6 +86,7 @@ export function McpRegistryPage() {
                     name,
                     transport_type: "streamable_http",
                     endpoint,
+                    project_id: projectId,
                     credential: credential || undefined,
                     enabled: true,
                   }),
@@ -222,6 +220,7 @@ export function McpRegistryPage() {
 }
 
 export function McpPoliciesPage() {
+  const { projectId } = useGateway()
   return (
     <JsonResourcePage
       title="MCP policies"
@@ -230,8 +229,8 @@ export function McpPoliciesPage() {
       idField="policy_id"
       initial={{
         name: "",
-        scope_kind: "tenant",
-        scope_id: "",
+        scope_kind: projectId ? "project" : "tenant",
+        scope_id: projectId ?? "",
         policy: {
           allowed_servers: [],
           denied_servers: [],
@@ -252,10 +251,7 @@ export function McpExplorerPage() {
 
   return (
     <>
-      <PageHeader
-        title="MCP explorer"
-        description="Invoke policy-filtered tools through the real MCP pipeline."
-      />
+      <PageHeader title="MCP explorer" />
       <DataState
         loading={tools.loading}
         error={tools.error}
@@ -357,10 +353,7 @@ export function ApprovalsPage() {
   }
   return (
     <>
-      <PageHeader
-        title="Approval inbox"
-        description="Tenant-scoped human decisions for protected operations."
-      />
+      <PageHeader title="Approval inbox" />
       <DataState
         loading={state.loading}
         error={state.error}
@@ -423,7 +416,7 @@ function JsonResourcePage({
   const [body, setBody] = React.useState(JSON.stringify(initial, null, 2))
   return (
     <>
-      <PageHeader title={title} description={description} />
+      <PageHeader title={title} />
       <Card className="mb-4">
         <CardHeader>
           <CardTitle>Create</CardTitle>

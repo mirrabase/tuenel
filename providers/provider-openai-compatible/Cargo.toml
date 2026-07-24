@@ -8,6 +8,7 @@ rust-version.workspace = true
 [dependencies]
 async-trait.workspace = true
 async-stream.workspace = true
+chrono.workspace = true
 eventsource-stream.workspace = true
 futures.workspace = true
 gateway-providers = { path = "../../crates/gateway-providers" }

@@ -14,6 +14,7 @@ use url::Url;
 pub struct AnthropicProvider {
     id: String,
     endpoint: Url,
+    models_endpoint: Url,
     api_key: SecretString,
     client: reqwest::Client,
 }
@@ -28,11 +29,16 @@ impl AnthropicProvider {
         if !base_url.path().ends_with('/') {
             base_url.set_path(&format!("{}/", base_url.path()));
         }
+        let endpoint = base_url
+            .join("v1/messages")
+            .map_err(|_| ProviderError::Protocol)?;
+        let models_endpoint = base_url
+            .join("v1/models")
+            .map_err(|_| ProviderError::Protocol)?;
         Ok(Self {
             id,
-            endpoint: base_url
-                .join("v1/messages")
-                .map_err(|_| ProviderError::Protocol)?,
+            endpoint,
+            models_endpoint,
             api_key,
             client: reqwest::Client::builder()
                 .timeout(timeout)
@@ -54,6 +60,24 @@ impl ModelProvider for AnthropicProvider {
             tool_calling: true,
             ..Default::default()
         }
+    }
+    async fn list_models(&self) -> Result<Vec<String>, ProviderError> {
+        let response = self
+            .client
+            .get(self.models_endpoint.clone())
+            .header("x-api-key", self.api_key.expose_secret())
+            .header("anthropic-version", "2023-06-01")
+            .query(&[("limit", 1000)])
+            .send()
+            .await
+            .map_err(map_error)?;
+        let status = response.status();
+        if !status.is_success() {
+            return Err(ProviderError::Upstream(status.as_u16()));
+        }
+        let response: AnthropicModelList =
+            response.json().await.map_err(|_| ProviderError::Protocol)?;
+        Ok(response.data.into_iter().map(|model| model.id).collect())
     }
     async fn infer(
         &self,
@@ -184,6 +208,14 @@ struct AnthropicResponse {
     usage: Option<AnthropicUsage>,
 }
 #[derive(Deserialize)]
+struct AnthropicModelList {
+    data: Vec<AnthropicModel>,
+}
+#[derive(Deserialize)]
+struct AnthropicModel {
+    id: String,
+}
+#[derive(Deserialize)]
 struct AnthropicContent {
     text: Option<String>,
 }
@@ -206,5 +238,17 @@ fn map_error(error: reqwest::Error) -> ProviderError {
         ProviderError::Timeout
     } else {
         ProviderError::Transport
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::AnthropicModelList;
+
+    #[test]
+    fn parses_model_ids() {
+        let response: AnthropicModelList =
+            serde_json::from_str(r#"{"data":[{"id":"claude-test"}]}"#).unwrap();
+        assert_eq!(response.data[0].id, "claude-test");
     }
 }

@@ -22,7 +22,10 @@ import {
   EmptyTitle,
 } from "@/components/ui/empty"
 import { Skeleton } from "@/components/ui/skeleton"
-import { gatewayFetch } from "@/lib/gateway-api"
+import { GatewayApiError, gatewayFetch } from "@/lib/gateway-api"
+
+export type GatewayDataError = { message: string; status?: number }
+export type TimeRange = "24h" | "7d" | "30d"
 
 export function StatusBadge({ status }: { status: string }) {
   const variant = [
@@ -48,22 +51,42 @@ export function StatusBadge({ status }: { status: string }) {
 
 export function PageHeader({
   title,
-  description,
   action,
 }: {
-  title: string
-  description: string
+  title: React.ReactNode
   action?: React.ReactNode
 }) {
   return (
-    <div className="mb-6 flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
+    <div className="mb-6 flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
       <div className="flex flex-col gap-1">
         <h1 className="font-heading text-2xl font-semibold tracking-tight">
           {title}
         </h1>
-        <p className="max-w-3xl text-sm text-muted-foreground">{description}</p>
       </div>
       {action}
+    </div>
+  )
+}
+
+export function TimeRangeSelector({
+  value,
+  onChange,
+}: {
+  value: TimeRange
+  onChange: (range: TimeRange) => void
+}) {
+  return (
+    <div className="flex rounded-md border p-1">
+      {(["24h", "7d", "30d"] as const).map((range) => (
+        <Button
+          key={range}
+          size="sm"
+          variant={value === range ? "secondary" : "ghost"}
+          onClick={() => onChange(range)}
+        >
+          {range}
+        </Button>
+      ))}
     </div>
   )
 }
@@ -93,12 +116,16 @@ export function DataState({
   error,
   empty,
   onRetry,
+  emptyTitle = "No records",
+  emptyDescription = "The gateway returned an empty result.",
   children,
 }: {
   loading: boolean
-  error?: string
+  error?: string | GatewayDataError
   empty?: boolean
   onRetry?: () => void
+  emptyTitle?: string
+  emptyDescription?: string
   children: React.ReactNode
 }) {
   if (loading)
@@ -108,13 +135,17 @@ export function DataState({
         <Skeleton className="h-16 w-full" />
       </div>
     )
-  if (error)
+  if (error) {
+    const detail = typeof error === "string" ? error : error.message
+    const denied = typeof error !== "string" && error.status === 403
     return (
       <Alert variant="destructive">
         <WarningCircleIcon />
-        <AlertTitle>Request failed</AlertTitle>
+        <AlertTitle>
+          {denied ? "Permission denied" : "Request failed"}
+        </AlertTitle>
         <AlertDescription>
-          {error}
+          {denied ? "Your organization role cannot view this data." : detail}
           {onRetry && (
             <Button className="ml-2" variant="link" size="sm" onClick={onRetry}>
               Retry
@@ -123,6 +154,7 @@ export function DataState({
         </AlertDescription>
       </Alert>
     )
+  }
   if (empty)
     return (
       <Empty>
@@ -130,29 +162,30 @@ export function DataState({
           <EmptyMedia variant="icon">
             <WarningCircleIcon />
           </EmptyMedia>
-          <EmptyTitle>No records</EmptyTitle>
-          <EmptyDescription>
-            The gateway returned an empty result.
-          </EmptyDescription>
+          <EmptyTitle>{emptyTitle}</EmptyTitle>
+          <EmptyDescription>{emptyDescription}</EmptyDescription>
         </EmptyHeader>
       </Empty>
     )
   return children
 }
 
-export function useGatewayData<T>(path: string) {
+export function useGatewayData<T>(path: string, projectId?: string) {
   const { tenantId } = useGateway()
   const [data, setData] = React.useState<T>()
-  const [error, setError] = React.useState<string>()
+  const [error, setError] = React.useState<GatewayDataError>()
   const [loading, setLoading] = React.useState(true)
   const load = React.useCallback(() => {
-    gatewayFetch<T>(path, tenantId)
+    gatewayFetch<T>(path, tenantId, undefined, projectId)
       .then(setData)
       .catch((reason) =>
-        setError(reason instanceof Error ? reason.message : "Request failed")
+        setError({
+          message: reason instanceof Error ? reason.message : "Request failed",
+          status: reason instanceof GatewayApiError ? reason.status : undefined,
+        })
       )
       .finally(() => setLoading(false))
-  }, [path, tenantId])
+  }, [path, projectId, tenantId])
   const reload = React.useCallback(() => {
     setLoading(true)
     setError(undefined)
@@ -162,4 +195,12 @@ export function useGatewayData<T>(path: string) {
     load()
   }, [load])
   return { data, error, loading, reload }
+}
+
+export function useGatewayEndpoint() {
+  return React.useSyncExternalStore(
+    () => () => {},
+    () => `${window.location.origin}/v1`,
+    () => "/v1"
+  )
 }

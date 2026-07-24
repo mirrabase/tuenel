@@ -19,6 +19,30 @@ test("dedicated forms build backend-compatible payloads", () => {
 
   assert.deepEqual(
     buildResourcePayload(
+      "routing",
+      form({
+        provider: "openai-main",
+        requested_model: "gateway-model",
+        upstream_model: "gpt-5",
+        priority: 1,
+      }),
+      tenantId,
+      false,
+      "project-a"
+    ),
+    {
+      tenant_id: tenantId,
+      project_id: "project-a",
+      provider: "openai-main",
+      requested_model: "gateway-model",
+      upstream_model: "gpt-5",
+      priority: 1,
+      enabled: false,
+    }
+  )
+
+  assert.deepEqual(
+    buildResourcePayload(
       "providers",
       form({
         id: "openai-main",

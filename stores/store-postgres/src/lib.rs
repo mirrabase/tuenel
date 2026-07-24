@@ -85,10 +85,11 @@ impl GatewayStore for PostgresStore {
     async fn insert_virtual_key(&self, key: VirtualKeyRecord) -> Result<(), StoreError> {
         sqlx::query(
             "INSERT INTO virtual_keys \
-             (id, lookup_prefix, secret_hash, tenant_id, project_id, user_id, scopes, expires_at, revoked_at, daily_token_limit) \
-             VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10)",
+             (id, display_name, lookup_prefix, secret_hash, tenant_id, project_id, user_id, scopes, expires_at, revoked_at, daily_token_limit, allowed_models, daily_request_limit, monthly_budget) \
+             VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14)",
         )
         .bind(key.id)
+        .bind(key.display_name)
         .bind(key.lookup_prefix)
         .bind(key.secret_hash)
         .bind(key.tenant_id)
@@ -98,6 +99,9 @@ impl GatewayStore for PostgresStore {
         .bind(key.expires_at)
         .bind(key.revoked_at)
         .bind(to_i64(key.daily_token_limit)?)
+        .bind(key.allowed_models)
+        .bind(key.daily_request_limit.map(to_i64).transpose()?)
+        .bind(key.monthly_budget)
         .execute(&self.pool)
         .await
         .map(|_| ())
@@ -109,8 +113,9 @@ impl GatewayStore for PostgresStore {
         prefix: &str,
     ) -> Result<Option<VirtualKeyRecord>, StoreError> {
         let row = sqlx::query(
-            "SELECT id, lookup_prefix, secret_hash, tenant_id, project_id, user_id, scopes, \
-             expires_at, revoked_at, daily_token_limit FROM virtual_keys WHERE lookup_prefix = $1",
+            "SELECT id, display_name, lookup_prefix, secret_hash, tenant_id, project_id, user_id, scopes, \
+             expires_at, revoked_at, daily_token_limit, allowed_models, daily_request_limit, monthly_budget \
+             FROM virtual_keys WHERE lookup_prefix = $1",
         )
         .bind(prefix)
         .fetch_optional(&self.pool)
@@ -119,13 +124,28 @@ impl GatewayStore for PostgresStore {
         row.map(virtual_key_from_row).transpose()
     }
 
-    async fn revoke_virtual_key(&self, tenant_id: &str, key_id: Uuid) -> Result<bool, StoreError> {
+    async fn touch_virtual_key(&self, key_id: Uuid) -> Result<(), StoreError> {
+        sqlx::query("UPDATE virtual_keys SET last_used_at=now() WHERE id=$1")
+            .bind(key_id)
+            .execute(&self.pool)
+            .await
+            .map(|_| ())
+            .map_err(map_sqlx)
+    }
+
+    async fn revoke_virtual_key(
+        &self,
+        tenant_id: &str,
+        project_id: Option<&str>,
+        key_id: Uuid,
+    ) -> Result<bool, StoreError> {
         sqlx::query(
             "UPDATE virtual_keys SET revoked_at = COALESCE(revoked_at, now()) \
-             WHERE tenant_id = $1 AND id = $2",
+             WHERE tenant_id = $1 AND id = $2 AND ($3::text IS NULL OR project_id = $3)",
         )
         .bind(tenant_id)
         .bind(key_id)
+        .bind(project_id)
         .execute(&self.pool)
         .await
         .map(|result| result.rows_affected() == 1)
@@ -152,6 +172,52 @@ impl GatewayStore for PostgresStore {
             .map_err(map_sqlx)?,
         }
         .ok_or(StoreError::NotFound)?;
+        if let QuotaOwner::VirtualKey(id) = &reservation.owner {
+            let constraints = sqlx::query(
+                "SELECT daily_request_limit, monthly_budget FROM virtual_keys
+                 WHERE id=$1 AND revoked_at IS NULL AND (expires_at IS NULL OR expires_at > now())",
+            )
+            .bind(id)
+            .fetch_optional(&mut *transaction)
+            .await
+            .map_err(map_sqlx)?
+            .ok_or(StoreError::NotFound)?;
+            let principal = format!("virtual-key:{id}");
+            if let Some(request_limit) = constraints
+                .try_get::<Option<i64>, _>("daily_request_limit")
+                .map_err(|_| StoreError::Unavailable)?
+            {
+                let requests: i64 = sqlx::query_scalar(
+                    "SELECT COUNT(*) FROM usage_events
+                     WHERE principal_id=$1 AND occurred_at>=date_trunc('day',now() AT TIME ZONE 'UTC') AT TIME ZONE 'UTC'",
+                )
+                .bind(&principal)
+                .fetch_one(&mut *transaction)
+                .await
+                .map_err(map_sqlx)?;
+                if requests >= request_limit {
+                    transaction.rollback().await.map_err(map_sqlx)?;
+                    return Ok(false);
+                }
+            }
+            if let Some(budget) = constraints
+                .try_get::<Option<rust_decimal::Decimal>, _>("monthly_budget")
+                .map_err(|_| StoreError::Unavailable)?
+            {
+                let spent: rust_decimal::Decimal = sqlx::query_scalar(
+                    "SELECT COALESCE(SUM(estimated_cost),0) FROM usage_events
+                     WHERE principal_id=$1 AND occurred_at>=date_trunc('month',now())",
+                )
+                .bind(&principal)
+                .fetch_one(&mut *transaction)
+                .await
+                .map_err(map_sqlx)?;
+                if spent >= budget {
+                    transaction.rollback().await.map_err(map_sqlx)?;
+                    return Ok(false);
+                }
+            }
+        }
 
         let start_of_day = "date_trunc('day', now() AT TIME ZONE 'UTC') AT TIME ZONE 'UTC'";
         let used: i64 = match &reservation.owner {
@@ -239,8 +305,8 @@ impl GatewayStore for PostgresStore {
         });
         sqlx::query(
             "INSERT INTO usage_events \
-             (event_id, request_id, tenant_id, project_id, principal_id, user_id, provider, requested_model, upstream_model, prompt_tokens, completion_tokens, total_tokens, estimated_cost, usage_estimated, status, occurred_at) \
-             VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16) \
+             (event_id, request_id, tenant_id, project_id, principal_id, user_id, provider, requested_model, upstream_model, prompt_tokens, completion_tokens, total_tokens, estimated_cost, usage_estimated, status, latency_ms, occurred_at) \
+             VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17) \
              ON CONFLICT (request_id) DO NOTHING",
         )
         .bind(event.event_id)
@@ -258,6 +324,7 @@ impl GatewayStore for PostgresStore {
         .bind(event.estimated_cost)
         .bind(event.usage.estimated)
         .bind(status_str(event.status))
+        .bind(event.latency_ms.map(to_i64).transpose()?)
         .bind(event.occurred_at)
         .execute(&mut *transaction)
         .await
@@ -309,7 +376,7 @@ impl GatewayStore for PostgresStore {
     async fn usage_by_request(&self, request_id: Uuid) -> Result<Option<UsageEvent>, StoreError> {
         sqlx::query(
             "SELECT event_id, request_id, tenant_id, project_id, principal_id, user_id, provider, requested_model, \
-             upstream_model, prompt_tokens, completion_tokens, estimated_cost, usage_estimated, status, occurred_at \
+             upstream_model, prompt_tokens, completion_tokens, estimated_cost, usage_estimated, status, latency_ms, occurred_at \
              FROM usage_events WHERE request_id = $1",
         )
         .bind(request_id)
@@ -324,6 +391,9 @@ impl GatewayStore for PostgresStore {
 fn virtual_key_from_row(row: sqlx::postgres::PgRow) -> Result<VirtualKeyRecord, StoreError> {
     Ok(VirtualKeyRecord {
         id: row.try_get("id").map_err(|_| StoreError::Unavailable)?,
+        display_name: row
+            .try_get("display_name")
+            .map_err(|_| StoreError::Unavailable)?,
         lookup_prefix: row
             .try_get("lookup_prefix")
             .map_err(|_| StoreError::Unavailable)?,
@@ -350,6 +420,17 @@ fn virtual_key_from_row(row: sqlx::postgres::PgRow) -> Result<VirtualKeyRecord, 
             row.try_get("daily_token_limit")
                 .map_err(|_| StoreError::Unavailable)?,
         )?,
+        allowed_models: row
+            .try_get("allowed_models")
+            .map_err(|_| StoreError::Unavailable)?,
+        daily_request_limit: row
+            .try_get::<Option<i64>, _>("daily_request_limit")
+            .map_err(|_| StoreError::Unavailable)?
+            .map(from_i64)
+            .transpose()?,
+        monthly_budget: row
+            .try_get("monthly_budget")
+            .map_err(|_| StoreError::Unavailable)?,
     })
 }
 
@@ -462,6 +543,11 @@ fn usage_from_row(row: sqlx::postgres::PgRow) -> Result<UsageEvent, StoreError> 
             "interrupted" => UsageStatus::Interrupted,
             _ => return Err(StoreError::Unavailable),
         },
+        latency_ms: row
+            .try_get::<Option<i64>, _>("latency_ms")
+            .map_err(|_| StoreError::Unavailable)?
+            .map(from_i64)
+            .transpose()?,
         occurred_at: row
             .try_get("occurred_at")
             .map_err(|_| StoreError::Unavailable)?,
