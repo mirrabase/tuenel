@@ -41,9 +41,8 @@ jobs:
         run: tests/deployment.sh
 
       - name: Setup pnpm
-        uses: pnpm/action-setup@v4
+        uses: pnpm/action-setup@v6
         with:
-          version: 10
           package_json_file: apps/gateway-web/package.json
 
       - name: Setup Node
