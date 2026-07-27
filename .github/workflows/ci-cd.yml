@@ -17,7 +17,7 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@v6
 
       - name: Install Rust
         uses: dtolnay/rust-toolchain@stable
@@ -40,18 +40,18 @@ jobs:
       - name: Validate deployment configuration
         run: tests/deployment.sh
 
-      - name: Setup Node
-        uses: actions/setup-node@v4
-        with:
-          node-version: 22
-          cache: pnpm
-          cache-dependency-path: apps/gateway-web/pnpm-lock.yaml
-
       - name: Setup pnpm
         uses: pnpm/action-setup@v4
         with:
           version: 10
           package_json_file: apps/gateway-web/package.json
+
+      - name: Setup Node
+        uses: actions/setup-node@v6
+        with:
+          node-version: 22
+          cache: pnpm
+          cache-dependency-path: apps/gateway-web/pnpm-lock.yaml
 
       - name: Install web dependencies
         working-directory: apps/gateway-web
@@ -83,7 +83,7 @@ jobs:
       packages: write
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@v6
 
       - name: Set up QEMU
         uses: docker/setup-qemu-action@v3
@@ -152,7 +152,7 @@ jobs:
     environment: production
     steps:
       - name: Checkout deployment files
-        uses: actions/checkout@v4
+        uses: actions/checkout@v6
 
       - name: Configure SSH
         env:
