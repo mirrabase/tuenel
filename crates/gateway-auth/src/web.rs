@@ -68,6 +68,7 @@ pub struct LoginResult {
 pub struct SessionInfo {
     pub user_id: Uuid,
     pub email: String,
+    pub gateway_admin: bool,
     pub expires_at: DateTime<Utc>,
     pub memberships: Vec<Membership>,
 }
@@ -77,6 +78,37 @@ pub struct InvitationResult {
     pub id: Uuid,
     pub token: SessionCredential,
     pub expires_at: DateTime<Utc>,
+}
+
+#[derive(Clone, Debug, Serialize)]
+pub struct Organization {
+    pub id: Uuid,
+    pub name: String,
+    pub slug: String,
+    pub default_environment: String,
+    pub region: String,
+    pub default_member_role: TenantRole,
+    pub default_provider_id: Option<String>,
+    pub version: u64,
+}
+
+#[derive(Clone, Debug, Deserialize)]
+pub struct OrganizationUpdate {
+    pub name: String,
+    pub slug: String,
+    pub default_environment: String,
+    pub region: String,
+    pub default_member_role: TenantRole,
+    pub default_provider_id: Option<String>,
+}
+
+#[derive(Clone, Debug, Serialize)]
+pub struct PendingInvitation {
+    pub id: Uuid,
+    pub email: String,
+    pub role: TenantRole,
+    pub expires_at: DateTime<Utc>,
+    pub created_at: DateTime<Utc>,
 }
 
 #[derive(Clone)]
@@ -96,6 +128,12 @@ impl fmt::Debug for SessionCredential {
 
 #[async_trait]
 pub trait IdentityRepository: Send + Sync {
+    async fn create_tenant(
+        &self,
+        user_id: Uuid,
+        tenant_id: Uuid,
+        tenant_name: &str,
+    ) -> Result<Membership, WebAuthError>;
     async fn create_account(
         &self,
         user: &WebUser,
@@ -142,6 +180,31 @@ pub trait IdentityRepository: Send + Sync {
         email: &str,
         now: DateTime<Utc>,
     ) -> Result<Membership, WebAuthError>;
+    async fn organization(&self, tenant_id: Uuid) -> Result<Option<Organization>, WebAuthError>;
+    async fn update_organization(
+        &self,
+        tenant_id: Uuid,
+        expected_version: u64,
+        input: &OrganizationUpdate,
+    ) -> Result<Organization, WebAuthError>;
+    async fn delete_organization(&self, tenant_id: Uuid) -> Result<(), WebAuthError>;
+    async fn pending_invitations(
+        &self,
+        tenant_id: Uuid,
+        now: DateTime<Utc>,
+    ) -> Result<Vec<PendingInvitation>, WebAuthError>;
+    async fn revoke_invitation(
+        &self,
+        tenant_id: Uuid,
+        invitation_id: Uuid,
+    ) -> Result<(), WebAuthError>;
+    async fn update_member(
+        &self,
+        tenant_id: Uuid,
+        user_id: Uuid,
+        role: TenantRole,
+    ) -> Result<(), WebAuthError>;
+    async fn remove_member(&self, tenant_id: Uuid, user_id: Uuid) -> Result<(), WebAuthError>;
 }
 
 #[derive(Clone)]
@@ -232,6 +295,7 @@ impl WebAuthService {
         Ok(SessionInfo {
             user_id: user.id,
             email: user.email,
+            gateway_admin: user.gateway_admin,
             expires_at,
             memberships: self.repository.memberships(user.id).await?,
         })
@@ -259,6 +323,21 @@ impl WebAuthService {
             authentication_method: AuthenticationMethod::WebSession,
             virtual_key_id: None,
         })
+    }
+
+    pub async fn create_tenant(
+        &self,
+        credential: &str,
+        tenant_name: &str,
+    ) -> Result<Membership, WebAuthError> {
+        let session = self.session(credential).await?;
+        let tenant_name = tenant_name.trim();
+        if tenant_name.is_empty() || tenant_name.len() > 100 {
+            return Err(WebAuthError::Invalid);
+        }
+        self.repository
+            .create_tenant(session.user_id, Uuid::now_v7(), tenant_name)
+            .await
     }
 
     pub async fn invite(
@@ -324,6 +403,145 @@ impl WebAuthService {
             )
             .await
     }
+
+    pub async fn organization(&self, credential: &str) -> Result<Organization, WebAuthError> {
+        let principal = self.authenticate(credential).await?;
+        self.repository
+            .organization(parse_tenant(&principal.tenant_id)?)
+            .await?
+            .ok_or(WebAuthError::NotFound)
+    }
+
+    pub async fn update_organization(
+        &self,
+        credential: &str,
+        expected_version: u64,
+        input: OrganizationUpdate,
+    ) -> Result<Organization, WebAuthError> {
+        let principal = self.authenticate(credential).await?;
+        require_manager(&principal.roles)?;
+        validate_organization(&input)?;
+        self.repository
+            .update_organization(
+                parse_tenant(&principal.tenant_id)?,
+                expected_version,
+                &input,
+            )
+            .await
+    }
+
+    pub async fn delete_organization(
+        &self,
+        credential: &str,
+        confirmation: &str,
+    ) -> Result<(), WebAuthError> {
+        let principal = self.authenticate(credential).await?;
+        if !principal.roles.iter().any(|role| role == "owner") {
+            return Err(WebAuthError::Forbidden);
+        }
+        let tenant_id = parse_tenant(&principal.tenant_id)?;
+        let organization = self
+            .repository
+            .organization(tenant_id)
+            .await?
+            .ok_or(WebAuthError::NotFound)?;
+        if confirmation != organization.slug {
+            return Err(WebAuthError::Invalid);
+        }
+        self.repository.delete_organization(tenant_id).await
+    }
+
+    pub async fn pending_invitations(
+        &self,
+        credential: &str,
+    ) -> Result<Vec<PendingInvitation>, WebAuthError> {
+        let principal = self.authenticate(credential).await?;
+        require_manager(&principal.roles)?;
+        self.repository
+            .pending_invitations(parse_tenant(&principal.tenant_id)?, Utc::now())
+            .await
+    }
+
+    pub async fn revoke_invitation(
+        &self,
+        credential: &str,
+        invitation_id: Uuid,
+    ) -> Result<(), WebAuthError> {
+        let principal = self.authenticate(credential).await?;
+        require_manager(&principal.roles)?;
+        self.repository
+            .revoke_invitation(parse_tenant(&principal.tenant_id)?, invitation_id)
+            .await
+    }
+
+    pub async fn update_member(
+        &self,
+        credential: &str,
+        user_id: Uuid,
+        role: TenantRole,
+    ) -> Result<(), WebAuthError> {
+        let principal = self.authenticate(credential).await?;
+        require_manager(&principal.roles)?;
+        if role == TenantRole::Owner {
+            return Err(WebAuthError::Forbidden);
+        }
+        self.repository
+            .update_member(parse_tenant(&principal.tenant_id)?, user_id, role)
+            .await
+    }
+
+    pub async fn remove_member(&self, credential: &str, user_id: Uuid) -> Result<(), WebAuthError> {
+        let principal = self.authenticate(credential).await?;
+        let actor = principal
+            .user_id
+            .as_deref()
+            .and_then(|value| Uuid::parse_str(value).ok())
+            .ok_or(WebAuthError::Forbidden)?;
+        if actor != user_id {
+            require_manager(&principal.roles)?;
+        }
+        self.repository
+            .remove_member(parse_tenant(&principal.tenant_id)?, user_id)
+            .await
+    }
+}
+
+fn require_manager(roles: &[String]) -> Result<(), WebAuthError> {
+    roles
+        .iter()
+        .any(|role| matches!(role.as_str(), "owner" | "admin"))
+        .then_some(())
+        .ok_or(WebAuthError::Forbidden)
+}
+
+fn parse_tenant(value: &str) -> Result<Uuid, WebAuthError> {
+    Uuid::parse_str(value).map_err(|_| WebAuthError::Invalid)
+}
+
+fn validate_organization(input: &OrganizationUpdate) -> Result<(), WebAuthError> {
+    let valid_slug = (2..=63).contains(&input.slug.len())
+        && input
+            .slug
+            .bytes()
+            .all(|byte| byte.is_ascii_lowercase() || byte.is_ascii_digit() || byte == b'-')
+        && !input.slug.starts_with('-')
+        && !input.slug.ends_with('-')
+        && !input.slug.contains("--");
+    if !(2..=100).contains(&input.name.trim().len())
+        || !valid_slug
+        || !matches!(
+            input.default_environment.as_str(),
+            "production" | "staging" | "development"
+        )
+        || !matches!(input.region.as_str(), "global" | "us" | "eu" | "apac")
+        || !matches!(
+            input.default_member_role,
+            TenantRole::Engineer | TenantRole::Viewer
+        )
+    {
+        return Err(WebAuthError::Invalid);
+    }
+    Ok(())
 }
 
 fn normalize_email(value: &str) -> Result<String, WebAuthError> {
@@ -400,6 +618,8 @@ pub enum WebAuthError {
     Conflict,
     #[error("operation is not permitted")]
     Forbidden,
+    #[error("identity record not found")]
+    NotFound,
     #[error("credential hashing failed")]
     Hashing,
     #[error("identity service unavailable")]

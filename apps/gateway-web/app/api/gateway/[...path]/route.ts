@@ -1,61 +1,108 @@
 import { gatewayApiUrl, sessionCredential } from "@/lib/server-auth"
+import { hasValidOrigin } from "@/lib/request-origin"
 
-const allowed = [
-  /^\/health$/,
-  /^\/ready$/,
-  /^\/openapi\.json$/,
-  /^\/metrics$/,
-  /^\/auth\/(tenants|invitations)(\/|$)/,
-  /^\/v1\/(models|chat\/completions|responses|embeddings)$/,
-  /^\/v1\/mcp\//,
-  /^\/v1\/gateway\/approvals\//,
-  /^\/admin\/(virtual-keys|mcp|approvals|security)(\/|$)/,
+const rules: [RegExp, ReadonlySet<string>][] = [
+  [/^\/(health|ready|openapi\.json)$/, new Set(["GET"])],
+  [
+    /^\/auth\/(tenants|invitations)(\/|$)/,
+    new Set(["GET", "POST", "PATCH", "DELETE"]),
+  ],
+  [
+    /^\/v1\/(models|chat\/completions|responses|embeddings)$/,
+    new Set(["GET", "POST"]),
+  ],
+  [/^\/v1\/(mcp|gateway\/approvals)\//, new Set(["GET", "POST"])],
+  [/^\/admin\//, new Set(["GET", "POST", "PATCH", "DELETE"])],
 ]
 
 async function forward(
   request: Request,
   { params }: { params: Promise<{ path: string[] }> }
 ) {
-  const url = new URL(request.url)
+  const incoming = new URL(request.url)
   const path = `/${(await params).path.join("/")}`
-  if (!allowed.some((pattern) => pattern.test(path)))
+  const allowed = rules.some(
+    ([pattern, methods]) => pattern.test(path) && methods.has(request.method)
+  )
+  if (!allowed)
     return Response.json(
-      { error: "Gateway path is not allowed" },
+      { error: { code: "not_found", message: "Gateway path is not allowed" } },
       { status: 404 }
     )
-  if (
-    request.method !== "GET" &&
-    request.method !== "HEAD" &&
-    request.headers.get("origin") !== url.origin
-  )
-    return Response.json({ error: "Invalid request origin" }, { status: 403 })
+  if (!["GET", "HEAD"].includes(request.method) && !hasValidOrigin(request))
+    return Response.json(
+      { error: { code: "invalid_origin", message: "Invalid request origin" } },
+      { status: 403 }
+    )
 
   const credential = await sessionCredential()
-  const tenant = url.searchParams.get("tenant")
+  const tenant = incoming.searchParams.get("tenant")
   if (!credential || !tenant || !/^[0-9a-f-]{36}$/i.test(tenant))
-    return Response.json({ error: "Authentication required" }, { status: 401 })
+    return Response.json(
+      { error: { code: "unauthorized", message: "Authentication required" } },
+      { status: 401 }
+    )
 
-  url.searchParams.delete("tenant")
-  const headers = new Headers(request.headers)
-  headers.delete("cookie")
-  headers.delete("host")
-  headers.delete("authorization")
+  incoming.searchParams.delete("tenant")
+  const headers = new Headers()
+  for (const name of [
+    "accept",
+    "content-type",
+    "if-match",
+    "idempotency-key",
+    "x-tuenel-project-id",
+  ]) {
+    const value = request.headers.get(name)
+    if (value) headers.set(name, value)
+  }
   headers.set("authorization", `Bearer ${credential}.${tenant}`)
-  const upstream = await fetch(`${gatewayApiUrl(path)}${url.search}`, {
-    method: request.method,
-    headers,
-    body:
-      request.method === "GET" || request.method === "HEAD"
-        ? null
-        : request.body,
-    duplex: "half",
-  } as RequestInit)
-  const responseHeaders = new Headers(upstream.headers)
-  responseHeaders.delete("set-cookie")
-  return new Response(upstream.body, {
-    status: upstream.status,
-    headers: responseHeaders,
-  })
+  try {
+    const upstream = await fetch(`${gatewayApiUrl(path)}${incoming.search}`, {
+      method: request.method,
+      headers,
+      body: ["GET", "HEAD"].includes(request.method) ? null : request.body,
+      duplex: "half",
+      signal: request.signal,
+      cache: "no-store",
+    } as RequestInit)
+    if (upstream.status >= 500) {
+      upstream.body?.cancel()
+      return Response.json(
+        {
+          error: {
+            code: "upstream_unavailable",
+            message: "Gateway service is unavailable",
+          },
+        },
+        { status: upstream.status }
+      )
+    }
+    const responseHeaders = new Headers()
+    for (const name of ["content-type", "etag", "x-request-id"]) {
+      const value = upstream.headers.get(name)
+      if (value) responseHeaders.set(name, value)
+    }
+    return new Response(upstream.body, {
+      status: upstream.status,
+      headers: responseHeaders,
+    })
+  } catch {
+    if (request.signal.aborted)
+      return new Response(null, {
+        status: 499,
+        statusText: "Client Closed Request",
+      })
+    console.error("gateway upstream request failed")
+    return Response.json(
+      {
+        error: {
+          code: "upstream_unavailable",
+          message: "Gateway service is unavailable",
+        },
+      },
+      { status: 502 }
+    )
+  }
 }
 
 export const GET = forward

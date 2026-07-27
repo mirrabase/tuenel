@@ -4,60 +4,50 @@ import * as React from "react"
 import Link from "next/link"
 import { usePathname, useRouter } from "next/navigation"
 import { useTheme } from "next-themes"
+import type { Icon } from "@phosphor-icons/react"
 import {
-  ActivityIcon,
-  BookOpenIcon,
+  BellIcon,
   BuildingsIcon,
-  ChatCircleDotsIcon,
+  CaretDownIcon,
   ChartLineUpIcon,
-  CirclesThreePlusIcon,
-  CoinsIcon,
-  DatabaseIcon,
-  GaugeIcon,
+  ClipboardTextIcon,
+  CloudIcon,
+  CodeIcon,
+  CubeIcon,
+  GearIcon,
+  GitBranchIcon,
+  HeartbeatIcon,
+  HouseLineIcon,
   KeyIcon,
-  LockKeyIcon,
+  LifebuoyIcon,
+  MagnifyingGlassIcon,
   MoonIcon,
   PlugsConnectedIcon,
-  ShieldCheckIcon,
+  PulseIcon,
+  ShieldChevronIcon,
   SignOutIcon,
+  SlidersHorizontalIcon,
   SunIcon,
+  TerminalWindowIcon,
   TreeStructureIcon,
   UserCircleIcon,
   UsersThreeIcon,
-  WrenchIcon,
 } from "@phosphor-icons/react"
 
-import { useMockGateway } from "@/components/mock-provider"
-import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert"
-import { Avatar, AvatarFallback } from "@/components/ui/avatar"
-import { Badge } from "@/components/ui/badge"
+import { useGateway } from "@/components/gateway-provider"
+import {
+  Command,
+  CommandEmpty,
+  CommandGroup,
+  CommandInput,
+  CommandItem,
+  CommandList,
+  CommandShortcut,
+} from "@/components/ui/command"
 import { Button } from "@/components/ui/button"
-import {
-  Card,
-  CardContent,
-  CardDescription,
-  CardHeader,
-  CardTitle,
-} from "@/components/ui/card"
-import {
-  Field,
-  FieldDescription,
-  FieldGroup,
-  FieldLabel,
-} from "@/components/ui/field"
-import { Input } from "@/components/ui/input"
-import {
-  Select,
-  SelectContent,
-  SelectGroup,
-  SelectItem,
-  SelectTrigger,
-  SelectValue,
-} from "@/components/ui/select"
 import {
   Sidebar,
   SidebarContent,
-  SidebarFooter,
   SidebarGroup,
   SidebarGroupContent,
   SidebarGroupLabel,
@@ -69,339 +59,374 @@ import {
   SidebarProvider,
   SidebarRail,
   SidebarTrigger,
+  useSidebar,
 } from "@/components/ui/sidebar"
-import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs"
+import { useGatewayData } from "@/components/pages/shared"
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle,
+} from "@/components/ui/dialog"
+import type { Page } from "@/lib/gateway-api"
+import { cn } from "@/lib/utils"
+import { toast } from "sonner"
 
-const groups = [
+type NavItem = {
+  path: string
+  label: string
+  icon: Icon
+  exact?: boolean
+}
+
+type NavGroup = { label: string; items: readonly NavItem[] }
+
+const organizationNavigation: readonly NavGroup[] = [
   {
-    label: "Workspace",
-    operator: false,
+    label: "Organization",
     items: [
-      { href: "/", label: "Overview", icon: GaugeIcon },
-      { href: "/playground", label: "Playground", icon: ChatCircleDotsIcon },
-      { href: "/models", label: "Models", icon: CirclesThreePlusIcon },
-      { href: "/keys", label: "Virtual Keys", icon: KeyIcon },
-      { href: "/usage", label: "Usage & cost", icon: ChartLineUpIcon },
-      { href: "/members", label: "Members", icon: UsersThreeIcon },
-      { href: "/docs", label: "API docs", icon: BookOpenIcon },
+      { path: "/projects", label: "Projects", icon: BuildingsIcon },
+      { path: "/team", label: "Team", icon: UsersThreeIcon },
+      { path: "/providers", label: "Providers", icon: CloudIcon },
+      { path: "/usage", label: "Organization Usage", icon: ChartLineUpIcon },
+      { path: "/settings", label: "Organization Settings", icon: GearIcon },
+    ],
+  },
+]
+
+const projectNavigation: readonly NavGroup[] = [
+  {
+    label: "Project",
+    items: [
+      { path: "", label: "Overview", icon: HouseLineIcon, exact: true },
+      { path: "/playground", label: "Playground", icon: TerminalWindowIcon },
     ],
   },
   {
-    label: "MCP",
-    operator: false,
-    items: [{ href: "/mcp", label: "Tool explorer", icon: WrenchIcon }],
-  },
-  {
-    label: "MCP",
-    operator: true,
+    label: "Gateway",
     items: [
-      { href: "/operator/mcp", label: "Registry", icon: PlugsConnectedIcon },
-      {
-        href: "/operator/mcp/policies",
-        label: "Policies",
-        icon: ShieldCheckIcon,
-      },
-      { href: "/operator/approvals", label: "Approvals", icon: UserCircleIcon },
+      { path: "/providers", label: "Providers", icon: CloudIcon },
+      { path: "/models", label: "Models", icon: CubeIcon },
+      { path: "/routing", label: "Routing", icon: GitBranchIcon },
+      { path: "/keys", label: "API Keys", icon: KeyIcon },
     ],
   },
   {
-    label: "Security",
-    operator: true,
+    label: "Observability",
     items: [
-      { href: "/operator/security", label: "Operations", icon: ActivityIcon },
-      {
-        href: "/operator/security/policies",
-        label: "Policies",
-        icon: LockKeyIcon,
-      },
+      { path: "/logs", label: "Requests", icon: PulseIcon },
+      { path: "/usage", label: "Usage & Cost", icon: ChartLineUpIcon },
+      { path: "/health", label: "Provider Health", icon: HeartbeatIcon },
     ],
   },
   {
-    label: "Platform Operations",
-    operator: true,
+    label: "Governance",
     items: [
-      { href: "/operator", label: "Fleet overview", icon: GaugeIcon },
-      { href: "/operator/tenants", label: "Tenants", icon: BuildingsIcon },
+      { path: "/policies", label: "Policies", icon: ShieldChevronIcon },
+      { path: "/audit", label: "Audit Logs", icon: ClipboardTextIcon },
+    ],
+  },
+  {
+    label: "Developer",
+    items: [
       {
-        href: "/operator/providers",
-        label: "Providers",
-        icon: PlugsConnectedIcon,
+        path: "/docs",
+        label: "API Reference",
+        icon: CodeIcon,
       },
-      { href: "/operator/routing", label: "Routing", icon: TreeStructureIcon },
-      { href: "/operator/pricing", label: "Pricing", icon: CoinsIcon },
       {
-        href: "/operator/policies",
-        label: "General policies",
-        icon: ShieldCheckIcon,
-      },
-      { href: "/operator/ledger", label: "Usage ledger", icon: DatabaseIcon },
-      { href: "/operator/system", label: "System", icon: ActivityIcon },
-      {
-        href: "/operator/integrations",
+        path: "/integrations",
         label: "Integrations",
         icon: PlugsConnectedIcon,
+      },
+      {
+        path: "/settings",
+        label: "Project Settings",
+        icon: SlidersHorizontalIcon,
       },
     ],
   },
 ]
 
-function Login() {
-  const { dispatch } = useMockGateway()
-  const [token, setToken] = React.useState("demo_admin")
-  const valid = token.startsWith("demo_")
+const menuItemClass =
+  "flex w-full items-center gap-2 rounded-md px-2 py-1.5 text-left text-xs hover:bg-accent focus-visible:bg-accent focus-visible:outline-none disabled:pointer-events-none disabled:opacity-50"
+
+function HeaderMenu({
+  label,
+  children,
+  className,
+}: {
+  label: React.ReactNode
+  children: React.ReactNode
+  className?: string
+}) {
   return (
-    <main className="flex min-h-screen items-center justify-center bg-muted/30 p-4">
-      <Card className="w-full max-w-lg">
-        <CardHeader>
-          <CardTitle>Gateway mock login</CardTitle>
-          <CardDescription>
-            Choose a simulated OIDC identity or use a demo-only development
-            token.
-          </CardDescription>
-        </CardHeader>
-        <CardContent>
-          <Tabs defaultValue="oidc">
-            <TabsList>
-              <TabsTrigger value="oidc">Simulated OIDC</TabsTrigger>
-              <TabsTrigger value="token">Development token</TabsTrigger>
-            </TabsList>
-            <TabsContent value="oidc" className="pt-4">
-              <div className="grid gap-3 sm:grid-cols-2">
-                <Button
-                  variant="outline"
-                  onClick={() =>
-                    dispatch({
-                      type: "login",
-                      mode: "oidc",
-                      role: "tenant_user",
-                    })
-                  }
-                >
-                  <UserCircleIcon data-icon="inline-start" />
-                  Avery · tenant user
-                </Button>
-                <Button
-                  onClick={() =>
-                    dispatch({
-                      type: "login",
-                      mode: "oidc",
-                      role: "gateway_admin",
-                    })
-                  }
-                >
-                  <ShieldCheckIcon data-icon="inline-start" />
-                  Alan · gateway admin
-                </Button>
-              </div>
-            </TabsContent>
-            <TabsContent value="token" className="pt-4">
-              <FieldGroup>
-                <Field data-invalid={!valid}>
-                  <FieldLabel htmlFor="dev-token">Demo token</FieldLabel>
-                  <Input
-                    id="dev-token"
-                    value={token}
-                    aria-invalid={!valid}
-                    onChange={(event) => setToken(event.target.value)}
-                    autoComplete="off"
-                  />
-                  <FieldDescription>
-                    Only values prefixed with demo_ are accepted. They are never
-                    persisted.
-                  </FieldDescription>
-                </Field>
-                <Button
-                  disabled={!valid}
-                  onClick={() =>
-                    dispatch({
-                      type: "login",
-                      mode: "development-token",
-                      role: token.includes("admin")
-                        ? "gateway_admin"
-                        : "tenant_user",
-                    })
-                  }
-                >
-                  Start simulated session
-                </Button>
-              </FieldGroup>
-            </TabsContent>
-          </Tabs>
-        </CardContent>
-      </Card>
-    </main>
+    <details className={cn("group relative", className)}>
+      <summary className="flex h-8 cursor-pointer list-none items-center gap-1.5 rounded-md px-2 text-xs font-medium hover:bg-muted focus-visible:ring-2 focus-visible:ring-ring/30 focus-visible:outline-none [&::-webkit-details-marker]:hidden">
+        {label}
+        <CaretDownIcon className="size-3 text-muted-foreground transition-transform group-open:rotate-180" />
+      </summary>
+      <div className="absolute top-full left-0 z-50 mt-1 min-w-56 rounded-lg bg-popover p-1 text-popover-foreground shadow-md ring-1 ring-foreground/10">
+        {children}
+      </div>
+    </details>
   )
 }
 
-export function ConsoleShell({
-  children,
-  scoped = false,
+type Project = {
+  id: string
+  name?: string
+  environment?: string
+  retired_at?: string
+}
+
+function target(base: string, path: string) {
+  return `${base}${path}`
+}
+
+function NavigationGroups({
+  base,
+  groups,
+  pathname,
 }: {
-  children: React.ReactNode
-  scoped?: boolean
+  base: string
+  groups: readonly NavGroup[]
+  pathname: string
 }) {
+  const { setOpenMobile } = useSidebar()
+  return groups.map((group) => (
+    <SidebarGroup key={group.label}>
+      <SidebarGroupLabel className="h-7 text-[0.6875rem] tracking-wider uppercase">
+        {group.label}
+      </SidebarGroupLabel>
+      <SidebarGroupContent>
+        <SidebarMenu>
+          {group.items.map((item) => {
+            const href = target(base, item.path)
+            const active =
+              pathname === href ||
+              (!item.exact && pathname.startsWith(`${href}/`))
+            return (
+              <SidebarMenuItem key={item.label}>
+                <SidebarMenuButton
+                  isActive={active}
+                  tooltip={item.label}
+                  render={
+                    <Link href={href} onClick={() => setOpenMobile(false)} />
+                  }
+                >
+                  <item.icon weight={active ? "fill" : "regular"} />
+                  <span>{item.label}</span>
+                </SidebarMenuButton>
+              </SidebarMenuItem>
+            )
+          })}
+        </SidebarMenu>
+      </SidebarGroupContent>
+    </SidebarGroup>
+  ))
+}
+
+export function ConsoleShell({ children }: { children: React.ReactNode }) {
   const pathname = usePathname()
-  const segments = pathname.split("/").filter(Boolean)
-  const scope = `/${segments[0]}/${segments[1]}`
-  const scopedHref = (href: string) => `${scope}${href === "/" ? "" : href}`
   const router = useRouter()
   const { resolvedTheme, setTheme } = useTheme()
-  const { state, dispatch } = useMockGateway()
-  if (!scoped && /^\/(en|id)(\/|$)/.test(pathname)) return children
-  if (!state.principal) return <Login />
-  const isAdmin = state.principal.role === "gateway_admin"
-  const blocked = pathname.startsWith("/operator") && !isAdmin
-  const projects = Object.values(state.projects).filter(
-    (project) => project.tenantId === state.principal?.tenantId
+  const session = useGateway()
+  const [searchOpen, setSearchOpen] = React.useState(false)
+  const [helpOpen, setHelpOpen] = React.useState(false)
+  const segments = pathname.split("/").filter(Boolean)
+  const locale = segments[0]
+  const scope = `/${locale}/${session.tenantId}`
+  const projectScope = session.projectId
+    ? `${scope}/project/${session.projectId}`
+    : ""
+  const inProject = Boolean(session.projectId)
+  const groups = inProject ? projectNavigation : organizationNavigation
+  const base = inProject ? projectScope : scope
+  const projects = useGatewayData<Page<Project>>(
+    `/admin/projects?tenant_id=${encodeURIComponent(session.tenantId)}`
   )
+  const project = projects.data?.data.find(
+    (item) => item.id === session.projectId
+  )
+  const projectName =
+    project?.name ?? `Project ${session.projectId?.slice(0, 8)}`
+  const environment = project?.environment ?? "Environment"
+  const playground = pathname === `${projectScope}/playground`
+
+  React.useEffect(() => {
+    const onKeyDown = (event: KeyboardEvent) => {
+      if (event.key.toLowerCase() === "k" && (event.metaKey || event.ctrlKey)) {
+        event.preventDefault()
+        setSearchOpen((open) => !open)
+      }
+    }
+    window.addEventListener("keydown", onKeyDown)
+    return () => window.removeEventListener("keydown", onKeyDown)
+  }, [])
+
+  const navigate = (href: string) => {
+    setSearchOpen(false)
+    router.push(href)
+  }
+
   return (
-    <SidebarProvider>
-      <Sidebar variant="inset" collapsible="icon">
+    <SidebarProvider
+      className={playground ? "h-svh overflow-hidden" : undefined}
+    >
+      <Sidebar collapsible="icon">
         <SidebarHeader>
           <SidebarMenu>
             <SidebarMenuItem>
               <SidebarMenuButton
                 size="lg"
-                tooltip="Tuenel Gateway"
-                render={<Link href="/" />}
+                tooltip="Tuenel"
+                render={<Link href={`${scope}/projects`} />}
               >
                 <span className="flex size-8 items-center justify-center rounded-md bg-primary text-primary-foreground">
                   <TreeStructureIcon weight="bold" />
                 </span>
-                <span className="flex min-w-0 flex-col">
-                  <span className="font-heading text-sm font-semibold">
-                    Tuenel
-                  </span>
-                  <span className="text-muted-foreground">
-                    Gateway v0.3 mock
-                  </span>
+                <span className="font-heading text-sm font-semibold group-data-[collapsible=icon]:hidden">
+                  Tuenel
                 </span>
               </SidebarMenuButton>
             </SidebarMenuItem>
           </SidebarMenu>
-          {isAdmin && (
-            <FieldGroup>
-              <Field>
-                <FieldLabel className="sr-only">Tenant</FieldLabel>
-                <Select
-                  items={Object.values(state.tenants).map((tenant) => ({
-                    label: tenant.name,
-                    value: tenant.id,
-                  }))}
-                  value={state.principal.tenantId}
-                  onValueChange={(tenantId) => {
-                    if (!tenantId) return
-                    const project = Object.values(state.projects).find(
-                      (item) => item.tenantId === tenantId
-                    )
-                    if (project)
-                      dispatch({
-                        type: "switch-context",
-                        tenantId,
-                        projectId: project.id,
-                      })
-                  }}
-                >
-                  <SelectTrigger className="w-full">
-                    <SelectValue />
-                  </SelectTrigger>
-                  <SelectContent>
-                    <SelectGroup>
-                      {Object.values(state.tenants).map((tenant) => (
-                        <SelectItem key={tenant.id} value={tenant.id}>
-                          {tenant.name}
-                        </SelectItem>
-                      ))}
-                    </SelectGroup>
-                  </SelectContent>
-                </Select>
-              </Field>
-              <Field>
-                <FieldLabel className="sr-only">Project</FieldLabel>
-                <Select
-                  items={projects.map((project) => ({
-                    label: project.name,
-                    value: project.id,
-                  }))}
-                  value={state.principal.projectId}
-                  onValueChange={(projectId) =>
-                    projectId &&
-                    dispatch({
-                      type: "switch-context",
-                      tenantId: state.principal!.tenantId,
-                      projectId,
-                    })
-                  }
-                >
-                  <SelectTrigger className="w-full">
-                    <SelectValue />
-                  </SelectTrigger>
-                  <SelectContent>
-                    <SelectGroup>
-                      {projects.map((project) => (
-                        <SelectItem key={project.id} value={project.id}>
-                          {project.name}
-                        </SelectItem>
-                      ))}
-                    </SelectGroup>
-                  </SelectContent>
-                </Select>
-              </Field>
-            </FieldGroup>
-          )}
         </SidebarHeader>
         <SidebarContent>
-          {groups
-            .filter((group) => !group.operator || isAdmin)
-            .map((group) => (
-              <SidebarGroup key={`${group.label}-${group.operator}`}>
-                <SidebarGroupLabel>{group.label}</SidebarGroupLabel>
-                <SidebarGroupContent>
-                  <SidebarMenu>
-                    {group.items.map((item) => (
-                      <SidebarMenuItem key={item.href}>
-                        <SidebarMenuButton
-                          isActive={pathname === scopedHref(item.href)}
-                          tooltip={item.label}
-                          render={<Link href={scopedHref(item.href)} />}
-                        >
-                          <item.icon />
-                          <span>{item.label}</span>
-                        </SidebarMenuButton>
-                      </SidebarMenuItem>
-                    ))}
-                  </SidebarMenu>
-                </SidebarGroupContent>
-              </SidebarGroup>
-            ))}
+          <NavigationGroups base={base} groups={groups} pathname={pathname} />
         </SidebarContent>
-        <SidebarFooter>
-          <div className="flex items-center gap-2 rounded-md p-2 group-data-[collapsible=icon]:p-0">
-            <Avatar className="size-8">
-              <AvatarFallback>
-                {state.principal.name
-                  .split(" ")
-                  .map((part) => part[0])
-                  .join("")}
-              </AvatarFallback>
-            </Avatar>
-            <div className="min-w-0 flex-1 group-data-[collapsible=icon]:hidden">
-              <p className="truncate text-xs font-medium">
-                {state.principal.name}
-              </p>
-              <p className="truncate text-xs text-muted-foreground">
-                {state.principal.role} · {state.principal.authMode}
-              </p>
-            </div>
-          </div>
-        </SidebarFooter>
         <SidebarRail />
       </Sidebar>
-      <SidebarInset>
-        <header className="sticky top-0 flex h-14 items-center gap-3 border-b bg-background/95 px-4 backdrop-blur sm:px-6">
-          <SidebarTrigger />
-          <Badge variant="outline">Connected</Badge>
-          <div className="ml-auto flex items-center gap-1">
+      <SidebarInset
+        className={playground ? "min-h-0 overflow-hidden" : undefined}
+      >
+        <header className="sticky top-0 z-30 flex h-12 shrink-0 items-center gap-2 border-b bg-background/95 px-3 backdrop-blur supports-[backdrop-filter]:bg-background/80 sm:px-4">
+          <SidebarTrigger aria-label="Toggle project navigation" />
+          <nav
+            aria-label="Workspace hierarchy"
+            className="flex min-w-0 items-center gap-1"
+          >
+            <HeaderMenu
+              className="max-w-36"
+              label={<span className="truncate">{session.tenantName}</span>}
+            >
+              <p className="px-2 py-1.5 text-xs text-muted-foreground">
+                Organization
+              </p>
+              {session.memberships.map((membership) => (
+                <button
+                  type="button"
+                  key={membership.tenant_id}
+                  className={menuItemClass}
+                  onClick={() =>
+                    router.push(`/${locale}/${membership.tenant_id}/projects`)
+                  }
+                >
+                  <BuildingsIcon />
+                  {membership.tenant_name}
+                </button>
+              ))}
+            </HeaderMenu>
+            {inProject && (
+              <>
+                <span className="text-xs text-muted-foreground">/</span>
+                <HeaderMenu
+                  className="max-w-40"
+                  label={<span className="truncate">{projectName}</span>}
+                >
+                  <p className="px-2 py-1.5 text-xs text-muted-foreground">
+                    Project
+                  </p>
+                  {projects.data?.data
+                    .filter((item) => !item.retired_at)
+                    .map((item) => (
+                      <button
+                        type="button"
+                        key={item.id}
+                        className={menuItemClass}
+                        onClick={() =>
+                          router.push(`${scope}/project/${item.id}`)
+                        }
+                      >
+                        <CubeIcon />
+                        {item.name ?? `Project ${item.id.slice(0, 8)}`}
+                      </button>
+                    ))}
+                </HeaderMenu>
+                <span className="hidden text-xs text-muted-foreground sm:inline">
+                  /
+                </span>
+                <HeaderMenu
+                  className="hidden max-w-32 sm:block"
+                  label={<span className="truncate">{environment}</span>}
+                >
+                  <p className="px-2 py-1.5 text-xs text-muted-foreground">
+                    Environment
+                  </p>
+                  <button
+                    type="button"
+                    className={menuItemClass}
+                    onClick={() => router.push(`${projectScope}/settings`)}
+                  >
+                    <GitBranchIcon />
+                    <span className="flex flex-col">
+                      <span>{environment}</span>
+                      <span className="text-muted-foreground">
+                        Configure environment
+                      </span>
+                    </span>
+                  </button>
+                </HeaderMenu>
+              </>
+            )}
+          </nav>
+          <div className="ml-auto flex shrink-0 items-center gap-1">
+            <Button
+              variant="outline"
+              size="sm"
+              className="hidden w-48 justify-start text-muted-foreground lg:flex"
+              onClick={() => setSearchOpen(true)}
+            >
+              <MagnifyingGlassIcon data-icon="inline-start" />
+              Search
+              <kbd className="ml-auto text-[0.625rem]">⌘K</kbd>
+            </Button>
+            <Button
+              variant="ghost"
+              size="icon-sm"
+              className="lg:hidden"
+              aria-label="Search"
+              onClick={() => setSearchOpen(true)}
+            >
+              <MagnifyingGlassIcon />
+            </Button>
+            <Button
+              variant="ghost"
+              size="icon-sm"
+              aria-label="Help & Feedback"
+              onClick={() => setHelpOpen(true)}
+            >
+              <LifebuoyIcon />
+            </Button>
+            <HeaderMenu
+              className="[&>div]:right-0 [&>div]:left-auto"
+              label={
+                <>
+                  <BellIcon />
+                  <span className="sr-only">Notifications</span>
+                </>
+              }
+            >
+              <p className="px-2 py-1.5 text-xs text-muted-foreground">
+                Notifications
+              </p>
+              <p className="px-2 py-3 text-xs text-muted-foreground">
+                No new notifications
+              </p>
+            </HeaderMenu>
             <Button
               variant="ghost"
               size="icon-sm"
@@ -410,39 +435,215 @@ export function ConsoleShell({
                 setTheme(resolvedTheme === "dark" ? "light" : "dark")
               }
             >
-              {resolvedTheme === "dark" ? <SunIcon /> : <MoonIcon />}
+              <SunIcon className="hidden dark:block" />
+              <MoonIcon className="dark:hidden" />
             </Button>
-            <Button
-              variant="ghost"
-              size="icon-sm"
-              aria-label="Sign out"
-              onClick={async () => {
-                await fetch("/api/auth/logout", { method: "POST" })
-                dispatch({ type: "logout" })
-                router.replace(`/${segments[0]}/login`)
-              }}
+            <HeaderMenu
+              className="[&>div]:right-0 [&>div]:left-auto"
+              label={
+                <div className="flex items-center gap-2">
+                  <div className="flex size-6 shrink-0 items-center justify-center overflow-hidden rounded-full bg-primary/10 text-[11px] font-semibold text-primary">
+                    {(session as Record<string, unknown>).avatarUrl ||
+                    (session as Record<string, unknown>).avatar ||
+                    (session as Record<string, unknown>).image ? (
+                      <img
+                        src={
+                          String(
+                            (session as Record<string, unknown>).avatarUrl ||
+                              (session as Record<string, unknown>).avatar ||
+                              (session as Record<string, unknown>).image
+                          )
+                        }
+                        alt="Profile photo"
+                        className="size-full object-cover"
+                      />
+                    ) : (
+                      (session.email?.[0] || "U").toUpperCase()
+                    )}
+                  </div>
+                  <span className="hidden max-w-[120px] truncate text-xs font-medium sm:inline-block">
+                    {session.email?.split("@")[0] || "Account"}
+                  </span>
+                </div>
+              }
             >
-              <SignOutIcon />
-            </Button>
+              <div className="px-2 py-1.5 text-xs">
+                <span className="block truncate font-medium">
+                  {session.email}
+                </span>
+                <span className="text-muted-foreground">
+                  {session.gatewayAdmin ? "gateway_admin" : session.tenantRole}
+                </span>
+              </div>
+              <div className="my-1 h-px bg-border/50" />
+              <button
+                type="button"
+                className={menuItemClass}
+                onClick={async () => {
+                  await fetch("/api/auth/logout", { method: "POST" })
+                  router.replace(`/${locale}/login`)
+                  router.refresh()
+                }}
+              >
+                <SignOutIcon />
+                Sign out
+              </button>
+            </HeaderMenu>
           </div>
         </header>
-        <div className="flex flex-1 flex-col p-4 sm:p-6 lg:p-8">
-          {blocked ? (
-            <Alert variant="destructive">
-              <LockKeyIcon />
-              <AlertTitle>Operator role required</AlertTitle>
-              <AlertDescription className="flex flex-col items-start gap-3">
-                Tenant users cannot open operator routes.
-                <Button variant="outline" onClick={() => router.replace(scope)}>
-                  Return to workspace
-                </Button>
-              </AlertDescription>
-            </Alert>
-          ) : (
-            children
+        <div
+          className={cn(
+            "flex flex-1 flex-col min-w-0 max-w-full",
+            playground
+              ? "min-h-0 overflow-hidden p-4 sm:p-5"
+              : "p-4 sm:p-6 lg:p-8"
           )}
+        >
+          {children}
         </div>
       </SidebarInset>
+      {searchOpen && (
+        <div
+          role="dialog"
+          aria-modal="true"
+          aria-label="Search Tuenel"
+          className="fixed inset-0 z-[100] flex items-start justify-center p-4 pt-[15vh]"
+          onKeyDown={(event) => {
+            if (event.key === "Escape") setSearchOpen(false)
+          }}
+        >
+          <button
+            type="button"
+            aria-label="Close search"
+            className="absolute inset-0 bg-black/70"
+            onClick={() => setSearchOpen(false)}
+          />
+          <Command className="relative z-10 h-auto max-h-[70vh] w-full max-w-xl shadow-2xl ring-1 ring-foreground/10">
+            <CommandInput placeholder="Search pages and projects…" autoFocus />
+            <CommandList>
+              <CommandEmpty>No matching pages or projects.</CommandEmpty>
+              {groups.map((group) => (
+                <CommandGroup key={group.label} heading={group.label}>
+                  {group.items.map((item) => (
+                    <CommandItem
+                      key={item.label}
+                      value={item.label}
+                      onSelect={() => navigate(target(base, item.path))}
+                    >
+                      <item.icon />
+                      {item.label}
+                    </CommandItem>
+                  ))}
+                </CommandGroup>
+              ))}
+              {inProject && (
+                <CommandGroup heading="Projects">
+                  {projects.data?.data
+                    .filter((item) => !item.retired_at)
+                    .map((item) => (
+                      <CommandItem
+                        key={item.id}
+                        value={`${item.name ?? "Project"} ${item.id}`}
+                        onSelect={() => navigate(`${scope}/project/${item.id}`)}
+                      >
+                        <CubeIcon />
+                        {item.name ?? `Project ${item.id.slice(0, 8)}`}
+                      </CommandItem>
+                    ))}
+                </CommandGroup>
+              )}
+            </CommandList>
+            <div className="border-t px-3 py-2 text-xs text-muted-foreground">
+              <CommandShortcut>Enter to open · Esc to close</CommandShortcut>
+            </div>
+          </Command>
+        </div>
+      )}
+      {helpOpen && (
+        <HelpModal open={helpOpen} onOpenChange={setHelpOpen} />
+      )}
     </SidebarProvider>
+  )
+}
+
+function HelpModal({
+  open,
+  onOpenChange,
+}: {
+  open: boolean
+  onOpenChange: (open: boolean) => void
+}) {
+  const [topic, setTopic] = React.useState("feedback")
+  const [message, setMessage] = React.useState("")
+  const [sending, setSending] = React.useState(false)
+
+  function handleSubmit(e: React.FormEvent) {
+    e.preventDefault()
+    if (!message.trim()) return
+    setSending(true)
+    setTimeout(() => {
+      setSending(false)
+      toast.success("Feedback sent! Thank you for helping us improve Tuenel.")
+      setMessage("")
+      onOpenChange(false)
+    }, 500)
+  }
+
+  return (
+    <Dialog open={open} onOpenChange={onOpenChange}>
+      <DialogContent className="max-w-md">
+        <DialogHeader>
+          <DialogTitle className="flex items-center gap-2">
+            <LifebuoyIcon className="size-5 text-primary" />
+            Help & Feedback
+          </DialogTitle>
+          <DialogDescription>
+            Found a bug, have a feature request, or need help? Send feedback directly to the team.
+          </DialogDescription>
+        </DialogHeader>
+
+        <form onSubmit={handleSubmit} className="space-y-4 py-1">
+          <div className="space-y-1.5">
+            <label className="text-xs font-medium text-foreground">Topic</label>
+            <select
+              value={topic}
+              onChange={(e) => setTopic(e.target.value)}
+              className="w-full rounded-md border bg-background px-3 py-2 text-xs text-foreground focus:outline-none focus:ring-2 focus:ring-ring/30"
+            >
+              <option value="feedback">General Feedback</option>
+              <option value="bug">Report an Issue / Bug</option>
+              <option value="feature">Feature Request</option>
+              <option value="question">Question / Help</option>
+            </select>
+          </div>
+
+          <div className="space-y-1.5">
+            <label className="text-xs font-medium text-foreground">Message</label>
+            <textarea
+              required
+              rows={4}
+              value={message}
+              onChange={(e) => setMessage(e.target.value)}
+              placeholder="Tell us what's on your mind or describe the issue..."
+              className="w-full rounded-md border bg-background p-3 text-xs text-foreground focus:outline-none focus:ring-2 focus:ring-ring/30"
+            />
+          </div>
+
+          <DialogFooter>
+            <Button
+              type="button"
+              variant="outline"
+              size="sm"
+              onClick={() => onOpenChange(false)}
+            >
+              Cancel
+            </Button>
+            <Button type="submit" size="sm" disabled={sending || !message.trim()}>
+              {sending ? "Sending..." : "Submit Feedback"}
+            </Button>
+          </DialogFooter>
+        </form>
+      </DialogContent>
+    </Dialog>
   )
 }

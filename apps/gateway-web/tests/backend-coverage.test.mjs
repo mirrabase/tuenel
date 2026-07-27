@@ -8,6 +8,7 @@ const repoRoot = join(webRoot, "..", "..")
 const backend = [
   "crates/gateway-server/src/lib.rs",
   "crates/gateway-server/src/v03.rs",
+  "crates/gateway-server/src/admin.rs",
 ]
   .map((file) => readFileSync(join(repoRoot, file), "utf8"))
   .join("\n")
@@ -15,66 +16,59 @@ const backendRoutes = [...backend.matchAll(/\.route\(\s*"([^"]+)"/g)].map(
   (match) => match[1]
 )
 
-const coverage = {
-  "/auth/signup": "/[locale]/(auth)/register",
-  "/auth/login": "/[locale]/(auth)/login",
-  "/auth/session": "/[locale]/(auth)/login",
-  "/auth/tenants/{tenant_id}/invitations": "/[locale]/[tenantId]/[[...slug]]",
-  "/auth/invitations/accept": "/[locale]/(auth)/invite",
-  "/health": "/docs",
-  "/ready": "/docs",
-  "/metrics": "/docs",
-  "/openapi.json": "/docs",
-  "/v1/models": "/models",
-  "/v1/chat/completions": "/playground",
-  "/v1/responses": "/playground",
-  "/v1/embeddings": "/playground",
-  "/admin/virtual-keys": "/keys",
-  "/admin/virtual-keys/{id}": "/keys",
-  "/admin/mcp/servers": "/operator/mcp",
-  "/admin/mcp/servers/{server_id}": "/operator/mcp",
-  "/admin/mcp/servers/{server_id}/refresh": "/operator/mcp",
-  "/admin/mcp/servers/{server_id}/health": "/operator/mcp",
-  "/admin/mcp/servers/{server_id}/tools": "/operator/mcp",
-  "/admin/mcp/tools": "/operator/mcp",
-  "/admin/mcp/policies": "/operator/mcp/policies",
-  "/admin/mcp/policies/{policy_id}": "/operator/mcp/policies",
-  "/v1/mcp/servers": "/mcp",
-  "/v1/mcp/tools": "/mcp",
-  "/v1/mcp/tools/call": "/mcp",
-  "/admin/approvals": "/operator/approvals",
-  "/admin/approvals/{approval_id}": "/operator/approvals",
-  "/admin/approvals/{approval_id}/approve": "/operator/approvals",
-  "/admin/approvals/{approval_id}/reject": "/operator/approvals",
-  "/v1/gateway/approvals/{approval_id}": "/mcp",
-  "/admin/security/policies": "/operator/security/policies",
-  "/admin/security/policies/{policy_id}": "/operator/security/policies",
-  "/admin/security/incidents": "/operator/security",
-  "/admin/security/incidents/{incident_id}": "/operator/security",
-  "/admin/security/findings": "/operator/security",
-  "/admin/security/events": "/operator/security",
-  "/mcp": "machine-only",
-}
-
-test("every backend HTTP route maps to a UI surface or documented machine-only exemption", () => {
+test("every browser API is represented by the authenticated catch-all console", () => {
+  assert.ok(backendRoutes.length > 40)
+  assert.equal(
+    existsSync(join(webRoot, "app/[locale]/[tenantId]/[[...slug]]/page.tsx")),
+    true
+  )
+  assert.equal(
+    existsSync(join(webRoot, "app/api/gateway/[...path]/route.ts")),
+    true
+  )
   const gaps = readFileSync(
     join(repoRoot, "GATEWAY_WEB_BACKEND_GAPS.md"),
     "utf8"
   )
-  assert.ok(backendRoutes.length > 20)
-  for (const route of backendRoutes) {
-    assert.ok(coverage[route], `missing coverage classification for ${route}`)
-    if (coverage[route] === "machine-only") assert.match(gaps, /Native `\/mcp`/)
-    else {
-      const relative =
-        coverage[route] === "/"
-          ? "app/page.tsx"
-          : `app${coverage[route]}/page.tsx`
-      assert.equal(
-        existsSync(join(webRoot, relative)),
-        true,
-        `${route} maps to missing ${relative}`
-      )
-    }
-  }
+  assert.match(gaps, /Native `\/mcp`/)
+  assert.deepEqual(
+    backendRoutes.filter((route) => route === "/mcp"),
+    ["/mcp"]
+  )
+})
+
+test("organization APIs and project-key isolation are enforced by the backend", () => {
+  for (const route of [
+    "/admin/usage/breakdowns",
+    "/admin/provider-health",
+    "/admin/billing/overview",
+    "/admin/billing/invoices",
+    "/admin/providers/{id}/models",
+    "/auth/tenants/{tenant_id}",
+    "/auth/tenants/{tenant_id}/invitations",
+    "/auth/tenants/{tenant_id}/members/{user_id}",
+  ])
+    assert.ok(backendRoutes.includes(route), `${route} is not registered`)
+
+  const adminStore = readFileSync(
+    join(repoRoot, "stores/store-postgres/src/admin.rs"),
+    "utf8"
+  )
+  const keyStore = readFileSync(
+    join(repoRoot, "stores/store-postgres/src/lib.rs"),
+    "utf8"
+  )
+  assert.match(adminStore, /FROM virtual_keys WHERE[\s\S]*project_id=\$3/)
+  assert.match(
+    adminStore,
+    /OperationalView::ProviderHealth[\s\S]*provider_health\(self, query\)/
+  )
+  assert.match(
+    adminStore,
+    /u\.project_id=\$2[\s\S]*u\.provider=\$5[\s\S]*upstream_model=\$6/
+  )
+  assert.match(
+    keyStore,
+    /tenant_id = \$1 AND id = \$2 AND \(\$3::text IS NULL OR project_id = \$3\)/
+  )
 })

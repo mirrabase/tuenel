@@ -77,6 +77,7 @@ impl IncidentService {
             .update_incident(
                 tenant_id,
                 IncidentTimelineEntry {
+                    entry_id: uuid::Uuid::now_v7(),
                     incident_id,
                     status,
                     actor,
@@ -84,6 +85,15 @@ impl IncidentService {
                     occurred_at: Utc::now(),
                 },
             )
+            .await
+    }
+    pub async fn timeline(
+        &self,
+        tenant_id: &str,
+        incident_id: IncidentId,
+    ) -> Result<Vec<IncidentTimelineEntry>, IncidentError> {
+        self.repository
+            .incident_timeline(tenant_id, incident_id)
             .await
     }
 }
@@ -144,6 +154,13 @@ mod tests {
             _: IncidentTimelineEntry,
         ) -> Result<SecurityIncident, IncidentError> {
             Err(IncidentError::NotFound)
+        }
+        async fn incident_timeline(
+            &self,
+            _: &str,
+            _: IncidentId,
+        ) -> Result<Vec<IncidentTimelineEntry>, IncidentError> {
+            Ok(vec![])
         }
     }
     #[tokio::test]

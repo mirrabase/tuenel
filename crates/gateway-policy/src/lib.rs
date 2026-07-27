@@ -4,7 +4,7 @@ use async_trait::async_trait;
 use gateway_types::Principal;
 use thiserror::Error;
 
-#[derive(Clone, Debug, Default, PartialEq)]
+#[derive(Clone, Debug, Default, PartialEq, serde::Deserialize, serde::Serialize)]
 pub struct Policy {
     pub allowed_models: Vec<String>,
     pub denied_models: Vec<String>,

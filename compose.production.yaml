@@ -1,0 +1,224 @@
+name: ${COMPOSE_PROJECT_NAME:-tuenel}
+
+x-logging: &default-logging
+  driver: json-file
+  options:
+    max-size: 10m
+    max-file: "5"
+
+services:
+  docker-socket-proxy:
+    profiles: [bundled-traefik]
+    image: ghcr.io/tecnativa/docker-socket-proxy:v0.4.2
+    restart: unless-stopped
+    environment:
+      CONTAINERS: "1"
+      EVENTS: "1"
+      INFO: "1"
+      NETWORKS: "1"
+      PING: "1"
+      POST: "0"
+      VERSION: "1"
+      LOG_LEVEL: warning
+    networks:
+      - docker-api
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock:ro
+    security_opt:
+      - no-new-privileges:true
+    logging: *default-logging
+
+  traefik:
+    profiles: [bundled-traefik]
+    image: traefik:v3.7
+    restart: unless-stopped
+    depends_on:
+      - docker-socket-proxy
+    command:
+      - --api.dashboard=false
+      - --api.insecure=false
+      - --ping=true
+      - --providers.docker=true
+      - --providers.docker.endpoint=tcp://docker-socket-proxy:2375
+      - --providers.docker.exposedbydefault=false
+      - --providers.docker.network=${TRAEFIK_NETWORK:-${COMPOSE_PROJECT_NAME:-tuenel}_edge}
+      - --entrypoints.web.address=:80
+      - --entrypoints.web.http.redirections.entrypoint.to=${TRAEFIK_SECURE_ENTRYPOINT:-websecure}
+      - --entrypoints.web.http.redirections.entrypoint.scheme=https
+      - --entrypoints.web.http.redirections.entrypoint.permanent=true
+      - --entrypoints.${TRAEFIK_SECURE_ENTRYPOINT:-websecure}.address=:443
+      - --entrypoints.${TRAEFIK_SECURE_ENTRYPOINT:-websecure}.http.tls=true
+      - --entrypoints.${TRAEFIK_SECURE_ENTRYPOINT:-websecure}.transport.respondingtimeouts.readtimeout=180s
+      - --entrypoints.${TRAEFIK_SECURE_ENTRYPOINT:-websecure}.transport.respondingtimeouts.writetimeout=0s
+      - --entrypoints.${TRAEFIK_SECURE_ENTRYPOINT:-websecure}.transport.respondingtimeouts.idletimeout=180s
+      - --certificatesresolvers.${TRAEFIK_CERTRESOLVER:-letsencrypt}.acme.email=${ACME_EMAIL:?Set ACME_EMAIL in .env.production}
+      - --certificatesresolvers.${TRAEFIK_CERTRESOLVER:-letsencrypt}.acme.storage=/letsencrypt/acme.json
+      - --certificatesresolvers.${TRAEFIK_CERTRESOLVER:-letsencrypt}.acme.keytype=EC256
+      - --certificatesresolvers.${TRAEFIK_CERTRESOLVER:-letsencrypt}.acme.httpchallenge.entrypoint=web
+      - --log.level=${TRAEFIK_LOG_LEVEL:-INFO}
+    ports:
+      - 80:80
+      - 443:443
+    networks:
+      - edge
+      - docker-api
+    volumes:
+      - traefik-acme:/letsencrypt
+    read_only: true
+    tmpfs:
+      - /tmp
+    security_opt:
+      - no-new-privileges:true
+    healthcheck:
+      test: ["CMD", "traefik", "healthcheck", "--ping"]
+      interval: 10s
+      timeout: 3s
+      retries: 5
+      start_period: 10s
+    logging: *default-logging
+
+  postgres:
+    image: postgres:16-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: ${POSTGRES_DB:-gateway}
+      POSTGRES_USER: ${POSTGRES_USER:-gateway}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?Set POSTGRES_PASSWORD in .env.production}
+    networks:
+      - backend
+    volumes:
+      - gateway-postgres:/var/lib/postgresql/data
+    shm_size: 256mb
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-gateway} -d ${POSTGRES_DB:-gateway}"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+      start_period: 10s
+    logging: *default-logging
+
+  redis:
+    image: redis:7-alpine
+    restart: unless-stopped
+    command: ["redis-server", "--save", "", "--appendonly", "no"]
+    networks:
+      - backend
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+      start_period: 5s
+    security_opt:
+      - no-new-privileges:true
+    logging: *default-logging
+
+  gateway:
+    image: ghcr.io/omnimusha-suite/tuenel-gateway:${TUENEL_VERSION:?Pin TUENEL_VERSION in .env.production}
+    restart: unless-stopped
+    init: true
+    environment:
+      DATABASE_URL: ${DATABASE_URL:?Set DATABASE_URL in .env.production}
+      REDIS_URL: redis://redis:6379
+      GATEWAY_CREDENTIALS_MASTER_KEY: ${GATEWAY_CREDENTIALS_MASTER_KEY:?Set GATEWAY_CREDENTIALS_MASTER_KEY in .env.production}
+      OIDC_ISSUER: ${OIDC_ISSUER:-}
+      OIDC_AUDIENCE: ${OIDC_AUDIENCE:-}
+      OIDC_JWKS_URL: ${OIDC_JWKS_URL:-}
+      OIDC_ADMIN_ROLE: ${OIDC_ADMIN_ROLE:-gateway_admin}
+      UPSTREAM_BASE_URL: ${UPSTREAM_BASE_URL:-}
+      UPSTREAM_API_KEY: ${UPSTREAM_API_KEY:-}
+      UPSTREAM_MODEL: ${UPSTREAM_MODEL:-}
+      GATEWAY_MODEL_ALIAS: ${GATEWAY_MODEL_ALIAS:-gateway-default}
+      GATEWAY_BIND_ADDR: 0.0.0.0:8080
+      DEFAULT_VIRTUAL_KEY_DAILY_TOKENS: ${DEFAULT_VIRTUAL_KEY_DAILY_TOKENS:-100000}
+      RUST_LOG: ${RUST_LOG:-info}
+      MCP_ENABLED: ${MCP_ENABLED:-true}
+      MCP_ALLOW_PRIVATE_HTTP_ENDPOINTS: "false"
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    networks:
+      - backend
+      - edge
+    expose:
+      - "8080"
+    labels:
+      - traefik.enable=true
+      - traefik.docker.network=${TRAEFIK_NETWORK:-${COMPOSE_PROJECT_NAME:-tuenel}_edge}
+      - traefik.http.routers.tuenel-api.rule=Host(`${TUENEL_API_DOMAIN:?Set TUENEL_API_DOMAIN in .env.production}`) && (PathPrefix(`/v1`) || Path(`/mcp`) || Path(`/health`) || Path(`/ready`) || Path(`/openapi.json`))
+      - traefik.http.routers.tuenel-api.entrypoints=${TRAEFIK_SECURE_ENTRYPOINT:-websecure}
+      - traefik.http.routers.tuenel-api.tls=true
+      - traefik.http.routers.tuenel-api.tls.certresolver=${TRAEFIK_CERTRESOLVER:-letsencrypt}
+      - traefik.http.routers.tuenel-api.middlewares=tuenel-secure-headers@docker
+      - traefik.http.routers.tuenel-api.service=tuenel-api
+      - traefik.http.services.tuenel-api.loadbalancer.server.port=8080
+      - traefik.http.middlewares.tuenel-compress.compress=true
+      - traefik.http.middlewares.tuenel-secure-headers.headers.contenttypenosniff=true
+      - traefik.http.middlewares.tuenel-secure-headers.headers.framedeny=true
+      - traefik.http.middlewares.tuenel-secure-headers.headers.referrerpolicy=strict-origin-when-cross-origin
+      - traefik.http.middlewares.tuenel-secure-headers.headers.stsseconds=31536000
+    healthcheck:
+      test: ["CMD", "curl", "--fail", "http://localhost:8080/ready"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+      start_period: 15s
+    stop_grace_period: 30s
+    security_opt:
+      - no-new-privileges:true
+    logging: *default-logging
+
+  gateway-web:
+    image: ghcr.io/omnimusha-suite/tuenel-gateway-web:${TUENEL_VERSION:?Pin TUENEL_VERSION in .env.production}
+    restart: unless-stopped
+    init: true
+    environment:
+      GATEWAY_API_URL: http://gateway:8080
+      WEB_SESSION_SECRET: ${WEB_SESSION_SECRET:?Set WEB_SESSION_SECRET in .env.production}
+      PORT: 3000
+      HOSTNAME: 0.0.0.0
+    depends_on:
+      gateway:
+        condition: service_healthy
+    networks:
+      - backend
+      - edge
+    expose:
+      - "3000"
+    labels:
+      - traefik.enable=true
+      - traefik.docker.network=${TRAEFIK_NETWORK:-${COMPOSE_PROJECT_NAME:-tuenel}_edge}
+      - traefik.http.routers.tuenel-web.rule=Host(`${TUENEL_WEB_DOMAIN:?Set TUENEL_WEB_DOMAIN in .env.production}`)
+      - traefik.http.routers.tuenel-web.entrypoints=${TRAEFIK_SECURE_ENTRYPOINT:-websecure}
+      - traefik.http.routers.tuenel-web.tls=true
+      - traefik.http.routers.tuenel-web.tls.certresolver=${TRAEFIK_CERTRESOLVER:-letsencrypt}
+      - traefik.http.routers.tuenel-web.middlewares=tuenel-secure-headers@docker,tuenel-compress@docker
+      - traefik.http.routers.tuenel-web.service=tuenel-web
+      - traefik.http.services.tuenel-web.loadbalancer.server.port=3000
+    healthcheck:
+      test: ["CMD", "node", "-e", "fetch('http://localhost:3000/en/login').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))"]
+      interval: 10s
+      timeout: 3s
+      retries: 10
+      start_period: 15s
+    stop_grace_period: 30s
+    security_opt:
+      - no-new-privileges:true
+    logging: *default-logging
+
+networks:
+  edge:
+    name: ${TRAEFIK_NETWORK:-${COMPOSE_PROJECT_NAME:-tuenel}_edge}
+    external: ${TRAEFIK_EXISTING:-false}
+  backend:
+    name: ${COMPOSE_PROJECT_NAME:-tuenel}_backend
+    internal: true
+  docker-api:
+    name: ${COMPOSE_PROJECT_NAME:-tuenel}_docker_api
+    internal: true
+
+volumes:
+  gateway-postgres:
+  traefik-acme:

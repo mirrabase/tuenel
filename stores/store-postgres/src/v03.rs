@@ -180,6 +180,36 @@ impl PolicyResolver for PostgresStore {
             };
             policy = policy.restrict_with(&next);
         }
+        let rows = sqlx::query(
+            "SELECT body FROM admin_resources WHERE kind='policies' AND enabled=true
+             AND retired_at IS NULL AND (tenant_id IS NULL OR tenant_id=$1)
+             AND ((body->>'scope_kind'='global')
+               OR (body->>'scope_kind'='tenant' AND body->>'scope_id'=$1)
+               OR (body->>'scope_kind'='project' AND body->>'scope_id'=$2)
+               OR (body->>'scope_kind'='principal' AND body->>'scope_id'=$3)
+               OR (body->>'scope_kind'='virtual_key' AND body->>'scope_id'=$4))
+             ORDER BY CASE body->>'scope_kind' WHEN 'global' THEN 1 WHEN 'tenant' THEN 2
+               WHEN 'project' THEN 3 WHEN 'principal' THEN 4 ELSE 5 END",
+        )
+        .bind(&principal.tenant_id)
+        .bind(principal.project_id.as_deref().unwrap_or(""))
+        .bind(&principal.principal_id)
+        .bind(
+            principal
+                .virtual_key_id
+                .map(|id| id.to_string())
+                .unwrap_or_default(),
+        )
+        .fetch_all(&self.pool)
+        .await
+        .map_err(|_| PolicyError::Unavailable)?;
+        for row in rows {
+            let body: serde_json::Value =
+                row.try_get("body").map_err(|_| PolicyError::Unavailable)?;
+            let next = serde_json::from_value(body.get("policy").cloned().unwrap_or(body))
+                .map_err(|_| PolicyError::Unavailable)?;
+            policy = policy.restrict_with(&next);
+        }
         Ok(policy)
     }
 }
@@ -192,8 +222,48 @@ impl PricingCatalog for PostgresStore {
         upstream_model: &str,
         at: DateTime<Utc>,
     ) -> Result<Option<ModelPrice>, PricingError> {
-        sqlx::query("SELECT * FROM model_prices WHERE provider_id=$1 AND upstream_model=$2 AND effective_from<=$3 AND (effective_until IS NULL OR effective_until>$3) ORDER BY effective_from DESC LIMIT 1").bind(provider_id).bind(upstream_model).bind(at).fetch_optional(&self.pool).await.map_err(|_|PricingError::Unavailable)?.map(|row|Ok(ModelPrice{price_id:row.try_get("price_id").map_err(|_|PricingError::Unavailable)?,provider_id:row.try_get("provider_id").map_err(|_|PricingError::Unavailable)?,upstream_model:row.try_get("upstream_model").map_err(|_|PricingError::Unavailable)?,input_cost_per_million:row.try_get("input_cost_per_million").map_err(|_|PricingError::Unavailable)?,output_cost_per_million:row.try_get("output_cost_per_million").map_err(|_|PricingError::Unavailable)?,cached_input_cost_per_million:row.try_get("cached_input_cost_per_million").map_err(|_|PricingError::Unavailable)?,embedding_cost_per_million:row.try_get("embedding_cost_per_million").map_err(|_|PricingError::Unavailable)?,effective_from:row.try_get("effective_from").map_err(|_|PricingError::Unavailable)?,effective_until:row.try_get("effective_until").map_err(|_|PricingError::Unavailable)?})).transpose()
+        if let Some(row)=sqlx::query("SELECT * FROM model_prices WHERE provider_id=$1 AND upstream_model=$2 AND effective_from<=$3 AND (effective_until IS NULL OR effective_until>$3) AND enabled=true AND retired_at IS NULL ORDER BY effective_from DESC LIMIT 1").bind(provider_id).bind(upstream_model).bind(at).fetch_optional(&self.pool).await.map_err(|_|PricingError::Unavailable)? {
+            return Ok(Some(ModelPrice{price_id:row.try_get("price_id").map_err(|_|PricingError::Unavailable)?,provider_id:row.try_get("provider_id").map_err(|_|PricingError::Unavailable)?,upstream_model:row.try_get("upstream_model").map_err(|_|PricingError::Unavailable)?,input_cost_per_million:row.try_get("input_cost_per_million").map_err(|_|PricingError::Unavailable)?,output_cost_per_million:row.try_get("output_cost_per_million").map_err(|_|PricingError::Unavailable)?,cached_input_cost_per_million:row.try_get("cached_input_cost_per_million").map_err(|_|PricingError::Unavailable)?,embedding_cost_per_million:row.try_get("embedding_cost_per_million").map_err(|_|PricingError::Unavailable)?,effective_from:row.try_get("effective_from").map_err(|_|PricingError::Unavailable)?,effective_until:row.try_get("effective_until").map_err(|_|PricingError::Unavailable)?}));
+        }
+        let row=sqlx::query("SELECT id,body FROM admin_resources WHERE kind='model_prices' AND enabled=true AND retired_at IS NULL AND body->>'provider_id'=$1 AND body->>'upstream_model'=$2 ORDER BY updated_at DESC LIMIT 1")
+            .bind(provider_id).bind(upstream_model).fetch_optional(&self.pool).await.map_err(|_|PricingError::Unavailable)?;
+        row.map(|row| {
+            let id: String = row.try_get("id").map_err(|_| PricingError::Unavailable)?;
+            let body: serde_json::Value =
+                row.try_get("body").map_err(|_| PricingError::Unavailable)?;
+            let value: AdminPrice =
+                serde_json::from_value(body.get("price").cloned().unwrap_or(body))
+                    .map_err(|_| PricingError::Unavailable)?;
+            let price = ModelPrice {
+                price_id: id.parse().map_err(|_| PricingError::Unavailable)?,
+                provider_id: value.provider_id,
+                upstream_model: value.upstream_model,
+                input_cost_per_million: value.input_cost_per_million,
+                output_cost_per_million: value.output_cost_per_million,
+                cached_input_cost_per_million: value.cached_input_cost_per_million,
+                embedding_cost_per_million: value.embedding_cost_per_million,
+                effective_from: value.effective_from,
+                effective_until: value.effective_until,
+            };
+            price
+                .active_at(at)
+                .then_some(price)
+                .ok_or(PricingError::Unavailable)
+        })
+        .transpose()
     }
+}
+
+#[derive(serde::Deserialize)]
+struct AdminPrice {
+    provider_id: String,
+    upstream_model: String,
+    input_cost_per_million: rust_decimal::Decimal,
+    output_cost_per_million: rust_decimal::Decimal,
+    cached_input_cost_per_million: Option<rust_decimal::Decimal>,
+    embedding_cost_per_million: Option<rust_decimal::Decimal>,
+    effective_from: DateTime<Utc>,
+    effective_until: Option<DateTime<Utc>>,
 }
 
 #[async_trait]
@@ -203,7 +273,55 @@ impl ProviderHealthRepository for PostgresStore {
         provider_id: &str,
         health: ProviderHealth,
     ) -> Result<(), ProviderError> {
-        sqlx::query("INSERT INTO provider_health (provider_id,status,consecutive_failures,latest_success_at,latest_failure_at,updated_at) VALUES ($1,$2,$3,$4,$5,now()) ON CONFLICT (provider_id) DO UPDATE SET status=EXCLUDED.status,consecutive_failures=EXCLUDED.consecutive_failures,latest_success_at=EXCLUDED.latest_success_at,latest_failure_at=EXCLUDED.latest_failure_at,updated_at=now()").bind(provider_id).bind(match health.status{ProviderHealthStatus::Healthy=>"healthy",ProviderHealthStatus::Degraded=>"degraded",ProviderHealthStatus::Unhealthy=>"unhealthy",ProviderHealthStatus::Unknown=>"unknown"}).bind(i32::try_from(health.consecutive_failures).unwrap_or(i32::MAX)).bind(health.latest_success_at).bind(health.latest_failure_at).execute(&self.pool).await.map_err(|_|ProviderError::Transport).map(|_|())
+        let mut transaction = self
+            .pool
+            .begin()
+            .await
+            .map_err(|_| ProviderError::Transport)?;
+        sqlx::query(
+            "INSERT INTO providers (id,tenant_id,provider_type,base_url,enabled)
+             SELECT id,tenant_id,body->>'provider_type',body->>'base_url',enabled
+             FROM admin_resources
+             WHERE kind='providers' AND id=$1 AND retired_at IS NULL
+             ON CONFLICT (id) DO UPDATE SET
+               tenant_id=EXCLUDED.tenant_id,
+               provider_type=EXCLUDED.provider_type,
+               base_url=EXCLUDED.base_url,
+               enabled=EXCLUDED.enabled,
+               updated_at=now()",
+        )
+        .bind(provider_id)
+        .execute(&mut *transaction)
+        .await
+        .map_err(|_| ProviderError::Transport)?;
+        sqlx::query(
+            "INSERT INTO provider_health
+               (provider_id,status,consecutive_failures,latest_success_at,latest_failure_at,updated_at)
+             VALUES($1,$2,$3,$4,$5,now())
+             ON CONFLICT (provider_id) DO UPDATE SET
+               status=EXCLUDED.status,
+               consecutive_failures=EXCLUDED.consecutive_failures,
+               latest_success_at=EXCLUDED.latest_success_at,
+               latest_failure_at=EXCLUDED.latest_failure_at,
+               updated_at=now()",
+        )
+        .bind(provider_id)
+        .bind(match health.status {
+            ProviderHealthStatus::Healthy => "healthy",
+            ProviderHealthStatus::Degraded => "degraded",
+            ProviderHealthStatus::Unhealthy => "unhealthy",
+            ProviderHealthStatus::Unknown => "unknown",
+        })
+        .bind(i32::try_from(health.consecutive_failures).unwrap_or(i32::MAX))
+        .bind(health.latest_success_at)
+        .bind(health.latest_failure_at)
+        .execute(&mut *transaction)
+        .await
+        .map_err(|_| ProviderError::Transport)?;
+        transaction
+            .commit()
+            .await
+            .map_err(|_| ProviderError::Transport)
     }
 }
 
@@ -295,6 +413,28 @@ impl McpRepository for PostgresStore {
         server_id: Option<McpServerId>,
     ) -> Result<Vec<GatewayMcpTool>, McpError> {
         sqlx::query("SELECT server_id,tool_name,description,input_schema,annotations FROM mcp_tools WHERE tenant_id=$1 AND active=true AND ($2::uuid IS NULL OR server_id=$2) ORDER BY server_id,tool_name").bind(tenant_id).bind(server_id.map(|id| id.0)).fetch_all(&self.pool).await.map_err(|_| McpError::Unavailable)?.into_iter().map(|row| Ok(GatewayMcpTool { server_id: McpServerId(row.try_get("server_id").map_err(|_| McpError::Unavailable)?), tool_name: row.try_get("tool_name").map_err(|_| McpError::Unavailable)?, description: row.try_get("description").map_err(|_| McpError::Unavailable)?, input_schema: row.try_get("input_schema").map_err(|_| McpError::Unavailable)?, annotations: serde_json::from_value(row.try_get("annotations").map_err(|_| McpError::Unavailable)?).map_err(|_| McpError::Invalid)? })).collect()
+    }
+    async fn update_tool_annotations(
+        &self,
+        tenant_id: &str,
+        server_id: McpServerId,
+        tool_name: &str,
+        annotations: gateway_types::ToolAnnotations,
+    ) -> Result<bool, McpError> {
+        let value = serde_json::to_value(&annotations).map_err(|_| McpError::Invalid)?;
+        let mut transaction = self.pool.begin().await.map_err(|_| McpError::Unavailable)?;
+        let updated=sqlx::query("UPDATE mcp_tools SET annotations=$4 WHERE tenant_id=$1 AND server_id=$2 AND tool_name=$3 AND active=true").bind(tenant_id).bind(server_id.0).bind(tool_name).bind(&value).execute(&mut *transaction).await.map_err(|_|McpError::Unavailable)?.rows_affected()==1;
+        if updated {
+            sqlx::query("INSERT INTO mcp_tool_annotations(annotation_id,tenant_id,server_id,tool_name,risk_level,metadata) VALUES($1,$2,$3,$4,$5,$6) ON CONFLICT(server_id,tool_name) DO UPDATE SET risk_level=EXCLUDED.risk_level,metadata=EXCLUDED.metadata")
+                .bind(Uuid::now_v7()).bind(tenant_id).bind(server_id.0).bind(tool_name)
+                .bind(annotations.administrator_risk.map(risk_name).unwrap_or("unknown"))
+                .bind(value).execute(&mut *transaction).await.map_err(|_|McpError::Unavailable)?;
+        }
+        transaction
+            .commit()
+            .await
+            .map_err(|_| McpError::Unavailable)?;
+        Ok(updated)
     }
 }
 
@@ -466,7 +606,17 @@ impl ApprovalRepository for PostgresStore {
 #[async_trait]
 impl IncidentRepository for PostgresStore {
     async fn insert_incident(&self, incident: SecurityIncident) -> Result<(), IncidentError> {
-        sqlx::query("INSERT INTO security_incidents (incident_id,tenant_id,project_id,principal_id,request_id,category,severity,status,risk_score,sanitized_summary,created_at,resolved_at) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12)").bind(incident.incident_id.0).bind(incident.tenant_id).bind(incident.project_id).bind(incident.principal_id).bind(incident.request_id).bind(category_name(incident.category)).bind(severity_name(incident.severity)).bind(incident_name(incident.status)).bind(i16::from(incident.risk_score)).bind(incident.sanitized_summary).bind(incident.created_at).bind(incident.resolved_at).execute(&self.pool).await.map_err(|_| IncidentError::Unavailable).map(|_| ())
+        let mut transaction = self
+            .pool
+            .begin()
+            .await
+            .map_err(|_| IncidentError::Unavailable)?;
+        sqlx::query("INSERT INTO security_incidents (incident_id,tenant_id,project_id,principal_id,request_id,category,severity,status,risk_score,sanitized_summary,created_at,resolved_at) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12)").bind(incident.incident_id.0).bind(&incident.tenant_id).bind(incident.project_id).bind(incident.principal_id).bind(incident.request_id).bind(category_name(incident.category)).bind(severity_name(incident.severity)).bind(incident_name(incident.status)).bind(i16::from(incident.risk_score)).bind(incident.sanitized_summary).bind(incident.created_at).bind(incident.resolved_at).execute(&mut *transaction).await.map_err(|_| IncidentError::Unavailable)?;
+        sqlx::query("INSERT INTO security_incident_timeline(entry_id,incident_id,tenant_id,status,actor,sanitized_note,occurred_at) VALUES($1,$2,$3,$4,'gateway',NULL,$5)").bind(Uuid::now_v7()).bind(incident.incident_id.0).bind(&incident.tenant_id).bind(incident_name(incident.status)).bind(incident.created_at).execute(&mut *transaction).await.map_err(|_|IncidentError::Unavailable)?;
+        transaction
+            .commit()
+            .await
+            .map_err(|_| IncidentError::Unavailable)
     }
     async fn incident(
         &self,
@@ -500,8 +650,34 @@ impl IncidentRepository for PostgresStore {
             IncidentStatus::Resolved | IncidentStatus::Ignored
         )
         .then_some(entry.occurred_at);
-        let row=sqlx::query("UPDATE security_incidents SET status=$3,resolved_at=$4 WHERE tenant_id=$1 AND incident_id=$2 RETURNING *").bind(tenant_id).bind(entry.incident_id.0).bind(incident_name(entry.status)).bind(resolved).fetch_optional(&self.pool).await.map_err(|_| IncidentError::Unavailable)?.ok_or(IncidentError::NotFound)?;
+        let mut transaction = self
+            .pool
+            .begin()
+            .await
+            .map_err(|_| IncidentError::Unavailable)?;
+        let row=sqlx::query("UPDATE security_incidents SET status=$3,resolved_at=$4 WHERE tenant_id=$1 AND incident_id=$2 RETURNING *").bind(tenant_id).bind(entry.incident_id.0).bind(incident_name(entry.status)).bind(resolved).fetch_optional(&mut *transaction).await.map_err(|_| IncidentError::Unavailable)?.ok_or(IncidentError::NotFound)?;
+        sqlx::query("INSERT INTO security_incident_timeline(entry_id,incident_id,tenant_id,status,actor,sanitized_note,occurred_at) VALUES($1,$2,$3,$4,$5,$6,$7)").bind(entry.entry_id).bind(entry.incident_id.0).bind(tenant_id).bind(incident_name(entry.status)).bind(entry.actor).bind(entry.sanitized_note).bind(entry.occurred_at).execute(&mut *transaction).await.map_err(|_|IncidentError::Unavailable)?;
+        transaction
+            .commit()
+            .await
+            .map_err(|_| IncidentError::Unavailable)?;
         incident_from_row(row)
+    }
+    async fn incident_timeline(
+        &self,
+        tenant_id: &str,
+        incident_id: IncidentId,
+    ) -> Result<Vec<IncidentTimelineEntry>, IncidentError> {
+        sqlx::query("SELECT entry_id,incident_id,status,actor,sanitized_note,occurred_at FROM security_incident_timeline WHERE tenant_id=$1 AND incident_id=$2 ORDER BY occurred_at,entry_id")
+            .bind(tenant_id).bind(incident_id.0).fetch_all(&self.pool).await.map_err(|_|IncidentError::Unavailable)?
+            .into_iter().map(|row|Ok(IncidentTimelineEntry{
+                entry_id:row.try_get("entry_id").map_err(|_|IncidentError::Unavailable)?,
+                incident_id:IncidentId(row.try_get("incident_id").map_err(|_|IncidentError::Unavailable)?),
+                status:parse_incident(&row.try_get::<String,_>("status").map_err(|_|IncidentError::Unavailable)?),
+                actor:row.try_get("actor").map_err(|_|IncidentError::Unavailable)?,
+                sanitized_note:row.try_get("sanitized_note").map_err(|_|IncidentError::Unavailable)?,
+                occurred_at:row.try_get("occurred_at").map_err(|_|IncidentError::Unavailable)?,
+            })).collect()
     }
 }
 

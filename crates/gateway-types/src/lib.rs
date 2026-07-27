@@ -337,6 +337,8 @@ pub struct UsageEvent {
     pub estimated_cost: Decimal,
     /// Request outcome.
     pub status: UsageStatus,
+    /// End-to-end attempt latency when observed.
+    pub latency_ms: Option<u64>,
     /// Event creation time.
     pub occurred_at: DateTime<Utc>,
 }
@@ -411,6 +413,8 @@ impl QuotaReservation {
 pub struct VirtualKeyRecord {
     /// Key identifier.
     pub id: Uuid,
+    /// Human-readable non-secret label.
+    pub display_name: Option<String>,
     /// Non-secret lookup prefix.
     pub lookup_prefix: String,
     /// Argon2id encoded secret hash.
@@ -429,6 +433,12 @@ pub struct VirtualKeyRecord {
     pub revoked_at: Option<DateTime<Utc>>,
     /// Daily token limit.
     pub daily_token_limit: u64,
+    /// Public model aliases allowed for this key; empty means policy-controlled.
+    pub allowed_models: Vec<String>,
+    /// Optional daily request ceiling.
+    pub daily_request_limit: Option<u64>,
+    /// Optional monthly estimated-cost ceiling.
+    pub monthly_budget: Option<Decimal>,
 }
 
 /// Metadata accepted when issuing a Virtual Key.
@@ -436,6 +446,8 @@ pub struct VirtualKeyRecord {
 pub struct NewVirtualKey {
     /// Owning tenant.
     pub tenant_id: String,
+    /// Human-readable non-secret label.
+    pub display_name: Option<String>,
     /// Optional project binding.
     pub project_id: Option<String>,
     /// Optional user binding.
@@ -446,6 +458,12 @@ pub struct NewVirtualKey {
     pub expires_at: Option<DateTime<Utc>>,
     /// Daily token limit.
     pub daily_token_limit: u64,
+    /// Public model aliases allowed for this key.
+    pub allowed_models: Vec<String>,
+    /// Optional daily request ceiling.
+    pub daily_request_limit: Option<u64>,
+    /// Optional monthly estimated-cost ceiling.
+    pub monthly_budget: Option<Decimal>,
 }
 
 /// Plaintext key returned exactly once after issuance.

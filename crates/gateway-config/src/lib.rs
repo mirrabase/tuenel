@@ -8,6 +8,8 @@ use secrecy::{ExposeSecret, SecretString};
 use thiserror::Error;
 use url::Url;
 
+const DEVELOPMENT_MASTER_KEY: &str = "MDEyMzQ1Njc4OWFiY2RlZjAxMjM0NTY3ODlhYmNkZWY=";
+
 /// Fully validated gateway settings.
 #[derive(Clone, Debug)]
 pub struct Settings {
@@ -20,21 +22,21 @@ pub struct Settings {
     /// Base64-encoded 32-byte credential encryption key.
     pub credentials_master_key: SecretString,
     /// Expected JWT issuer.
-    pub oidc_issuer: String,
+    pub oidc_issuer: Option<String>,
     /// Expected JWT audience.
-    pub oidc_audience: String,
+    pub oidc_audience: Option<String>,
     /// JWKS endpoint for the issuer.
-    pub oidc_jwks_url: Url,
+    pub oidc_jwks_url: Option<Url>,
     /// Role required by tenant administration routes.
     pub oidc_admin_role: String,
     /// OpenAI-compatible upstream base URL.
-    pub upstream_base_url: Url,
+    pub upstream_base_url: Option<Url>,
     /// Optional upstream bearer key.
     pub upstream_api_key: Option<SecretString>,
     /// Public model alias.
     pub model_alias: String,
     /// Upstream model name.
-    pub upstream_model: String,
+    pub upstream_model: Option<String>,
     pub anthropic_base_url: Url,
     pub anthropic_api_key: Option<SecretString>,
     pub anthropic_model: Option<String>,
@@ -77,17 +79,17 @@ impl Settings {
             database_url: secret(required("DATABASE_URL")?),
             redis_url: secret(required("REDIS_URL")?),
             credentials_master_key: secret(required("GATEWAY_CREDENTIALS_MASTER_KEY")?),
-            oidc_issuer: required("OIDC_ISSUER")?,
-            oidc_audience: required("OIDC_AUDIENCE")?,
-            oidc_jwks_url: parse_required("OIDC_JWKS_URL")?,
+            oidc_issuer: optional("OIDC_ISSUER"),
+            oidc_audience: optional("OIDC_AUDIENCE"),
+            oidc_jwks_url: parse_optional("OIDC_JWKS_URL")?,
             oidc_admin_role: value_or("OIDC_ADMIN_ROLE", "gateway_admin"),
-            upstream_base_url: parse_required("UPSTREAM_BASE_URL")?,
+            upstream_base_url: parse_optional("UPSTREAM_BASE_URL")?,
             upstream_api_key: env::var("UPSTREAM_API_KEY")
                 .ok()
                 .filter(|value| !value.is_empty())
                 .map(secret),
             model_alias: value_or("GATEWAY_MODEL_ALIAS", "gateway-default"),
-            upstream_model: required("UPSTREAM_MODEL")?,
+            upstream_model: optional("UPSTREAM_MODEL"),
             anthropic_base_url: parse_or("ANTHROPIC_BASE_URL", "https://api.anthropic.com/")?,
             anthropic_api_key: optional_secret("ANTHROPIC_API_KEY"),
             anthropic_model: optional("ANTHROPIC_MODEL"),
@@ -144,7 +146,26 @@ impl Settings {
                 "DEFAULT_OUTPUT_TOKENS must be between 1 and MAX_OUTPUT_TOKENS".into(),
             ));
         }
-        if !matches!(settings.upstream_base_url.scheme(), "http" | "https") {
+        complete_group(
+            "OIDC_ISSUER, OIDC_AUDIENCE, and OIDC_JWKS_URL",
+            &[
+                settings.oidc_issuer.is_some(),
+                settings.oidc_audience.is_some(),
+                settings.oidc_jwks_url.is_some(),
+            ],
+        )?;
+        complete_group(
+            "UPSTREAM_BASE_URL and UPSTREAM_MODEL",
+            &[
+                settings.upstream_base_url.is_some(),
+                settings.upstream_model.is_some(),
+            ],
+        )?;
+        if settings
+            .upstream_base_url
+            .as_ref()
+            .is_some_and(|url| !matches!(url.scheme(), "http" | "https"))
+        {
             return Err(ConfigError::Invalid(
                 "UPSTREAM_BASE_URL must use http or https".into(),
             ));
@@ -191,6 +212,11 @@ impl Settings {
         }
         Ok(settings)
     }
+
+    /// Warn when the public development key is used without exposing it.
+    pub fn development_secret_warning(&self) -> Option<&'static str> {
+        development_secret_warning(self.credentials_master_key.expose_secret())
+    }
 }
 
 /// Configuration loading failure.
@@ -215,14 +241,18 @@ fn value_or(name: &'static str, default: &str) -> String {
     env::var(name).unwrap_or_else(|_| default.to_owned())
 }
 
-fn parse_required<T>(name: &'static str) -> Result<T, ConfigError>
+fn parse_optional<T>(name: &'static str) -> Result<Option<T>, ConfigError>
 where
     T: FromStr,
     T::Err: std::fmt::Display,
 {
-    required(name)?.parse().map_err(|error: T::Err| {
-        ConfigError::Invalid(format!("{name} could not be parsed: {error}"))
-    })
+    optional(name)
+        .map(|value| {
+            value.parse().map_err(|error: T::Err| {
+                ConfigError::Invalid(format!("{name} could not be parsed: {error}"))
+            })
+        })
+        .transpose()
 }
 
 fn parse_or<T>(name: &'static str, default: &str) -> Result<T, ConfigError>
@@ -244,4 +274,38 @@ fn optional(name: &'static str) -> Option<String> {
 }
 fn optional_secret(name: &'static str) -> Option<SecretString> {
     optional(name).map(secret)
+}
+
+fn development_secret_warning(value: &str) -> Option<&'static str> {
+    (value == DEVELOPMENT_MASTER_KEY).then_some(
+        "GATEWAY_CREDENTIALS_MASTER_KEY uses the known development example; replace it before production",
+    )
+}
+
+fn complete_group(name: &str, configured: &[bool]) -> Result<(), ConfigError> {
+    if configured.iter().any(|value| *value) && !configured.iter().all(|value| *value) {
+        return Err(ConfigError::Invalid(format!(
+            "{name} must be configured together"
+        )));
+    }
+    Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn development_secret_warning_never_contains_the_secret() {
+        let warning = development_secret_warning(DEVELOPMENT_MASTER_KEY).unwrap();
+        assert!(warning.contains("GATEWAY_CREDENTIALS_MASTER_KEY"));
+        assert!(!warning.contains(DEVELOPMENT_MASTER_KEY));
+    }
+
+    #[test]
+    fn optional_configuration_groups_reject_partial_values() {
+        assert!(complete_group("OIDC", &[false, false, false]).is_ok());
+        assert!(complete_group("OIDC", &[true, true, true]).is_ok());
+        assert!(complete_group("OIDC", &[true, false, true]).is_err());
+    }
 }

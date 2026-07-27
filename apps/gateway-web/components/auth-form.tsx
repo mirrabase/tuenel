@@ -84,7 +84,7 @@ export function AuthForm({
       setPending(false)
       return
     }
-    router.replace(`/${locale}/${tenant}`)
+    router.replace(mode === "signup" ? `/${locale}/${tenant}/projects/new` : `/${locale}`)
     router.refresh()
   }
 

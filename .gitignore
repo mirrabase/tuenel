@@ -1,5 +1,6 @@
 /target/
 .env
+.env.production
 *.log
 
 graphify-out/

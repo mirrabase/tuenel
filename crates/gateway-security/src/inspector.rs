@@ -49,6 +49,9 @@ impl SecurityInspector for CustomPatternInspector {
         let mut findings = Vec::new();
         // ponytail: compile per inspection; add a tenant-versioned cache only when custom-pattern volume warrants it.
         for item in self.repository.custom_patterns(&context.tenant_id).await? {
+            if !item.enabled {
+                continue;
+            }
             let pattern =
                 regex::Regex::new(&item.pattern).map_err(|_| SecurityError::InspectionFailed)?;
             let evidence = security_regex::find(std::slice::from_ref(&pattern), &text, 32)

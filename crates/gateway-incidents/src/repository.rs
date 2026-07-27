@@ -22,4 +22,9 @@ pub trait IncidentRepository: Send + Sync {
         tenant_id: &str,
         entry: IncidentTimelineEntry,
     ) -> Result<SecurityIncident, IncidentError>;
+    async fn incident_timeline(
+        &self,
+        tenant_id: &str,
+        incident_id: IncidentId,
+    ) -> Result<Vec<IncidentTimelineEntry>, IncidentError>;
 }

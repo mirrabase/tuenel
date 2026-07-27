@@ -1,5 +1,6 @@
 //! Axum transport for the OpenAI-compatible v0.1 API.
 
+mod admin;
 mod v03;
 
 use std::{convert::Infallible, sync::Arc, time::Instant};
@@ -8,7 +9,7 @@ use async_stream::stream;
 use axum::{
     Extension, Json, Router,
     body::Body,
-    extract::{Path, State},
+    extract::{Path, Query, State},
     http::{HeaderMap, HeaderValue, Request, StatusCode},
     middleware::{self, Next},
     response::{IntoResponse, Response, Sse, sse::Event},
@@ -16,8 +17,10 @@ use axum::{
 };
 use chrono::{DateTime, Utc};
 use futures::StreamExt;
-use gateway_auth::{AuthError, Authenticator, LoginResult, Signup, WebAuthError, WebAuthService};
-use gateway_core::{GatewayError, GatewayService};
+use gateway_auth::{
+    AuthError, Authenticator, LoginResult, OrganizationUpdate, Signup, WebAuthError, WebAuthService,
+};
+use gateway_core::{GatewayError, GatewayRuntime};
 use gateway_keys::VirtualKeyService;
 use gateway_quota::QuotaError;
 use gateway_store::GatewayStore;
@@ -26,6 +29,7 @@ use gateway_types::{
     GatewayMessage, GatewayRequest, GatewayStreamEvent, GenerationParameters, InstructionRole,
     MessageRole, NewVirtualKey, Principal, RequestMetadata, TokenUsage,
 };
+use rust_decimal::prelude::FromPrimitive;
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 use tower_http::limit::RequestBodyLimitLayer;
@@ -42,11 +46,13 @@ pub struct AppState {
     /// Gateway-owned browser identity and session service.
     pub web_auth: Option<WebAuthService>,
     /// Inference application service.
-    pub gateway: Arc<GatewayService>,
+    pub gateway: GatewayRuntime,
     /// Virtual Key lifecycle service.
     pub keys: VirtualKeyService,
     /// Store used for readiness checks.
     pub store: Arc<dyn GatewayStore>,
+    /// Provider health snapshot persistence.
+    pub provider_health: Option<Arc<dyn gateway_providers::ProviderHealthRepository>>,
     /// JWT role required by admin routes.
     pub admin_role: String,
     /// Maximum accepted output tokens.
@@ -75,6 +81,8 @@ pub struct AppState {
     pub security_repository: Option<Arc<dyn gateway_security::SecurityRepository>>,
     /// Append-only audit event service.
     pub audit: Option<gateway_events::AuditService>,
+    /// PostgreSQL-backed control-plane administration.
+    pub admin: Option<gateway_admin::AdminService>,
 }
 
 /// Build the complete HTTP router.
@@ -90,8 +98,23 @@ pub fn router(state: AppState) -> Router {
         .route("/auth/session", get(session).delete(logout))
         .route(
             "/auth/tenants/{tenant_id}/invitations",
-            post(create_invitation),
+            get(list_invitations).post(create_invitation),
         )
+        .route(
+            "/auth/tenants/{tenant_id}/invitations/{invitation_id}",
+            delete(revoke_invitation),
+        )
+        .route(
+            "/auth/tenants/{tenant_id}/members/{user_id}",
+            axum::routing::patch(update_member).delete(remove_member),
+        )
+        .route(
+            "/auth/tenants/{tenant_id}",
+            get(organization)
+                .patch(update_organization)
+                .delete(delete_organization),
+        )
+        .route("/auth/tenants", post(create_tenant))
         .route("/auth/invitations/accept", post(accept_invitation))
         .route("/v1/models", get(models))
         .route("/v1/chat/completions", post(chat_completions))
@@ -99,6 +122,7 @@ pub fn router(state: AppState) -> Router {
         .route("/v1/embeddings", post(embeddings))
         .route("/admin/virtual-keys", post(create_virtual_key))
         .route("/admin/virtual-keys/{id}", delete(revoke_virtual_key))
+        .merge(admin::routes())
         .merge(v03::routes())
         .layer(RequestBodyLimitLayer::new(body_limit))
         .layer(middleware::from_fn(request_context))
@@ -120,8 +144,8 @@ pub fn openapi_document() -> utoipa::openapi::OpenApi {
     serde_json::from_value(value).expect("generated OpenAPI is valid")
 }
 
-fn v03_openapi_paths() -> [(&'static str, &'static [&'static str]); 23] {
-    [
+fn v03_openapi_paths() -> Vec<(&'static str, &'static [&'static str])> {
+    vec![
         ("/admin/mcp/servers", &["get", "post"]),
         (
             "/admin/mcp/servers/{server_id}",
@@ -131,6 +155,10 @@ fn v03_openapi_paths() -> [(&'static str, &'static [&'static str]); 23] {
         ("/admin/mcp/servers/{server_id}/health", &["post"]),
         ("/admin/mcp/servers/{server_id}/tools", &["get"]),
         ("/admin/mcp/tools", &["get"]),
+        (
+            "/admin/mcp/tools/{server_id}/{tool_name}/annotations",
+            &["patch"],
+        ),
         ("/admin/mcp/policies", &["get", "post"]),
         ("/admin/mcp/policies/{policy_id}", &["patch", "delete"]),
         ("/v1/mcp/servers", &["get"]),
@@ -142,12 +170,61 @@ fn v03_openapi_paths() -> [(&'static str, &'static [&'static str]); 23] {
         ("/admin/approvals/{approval_id}/approve", &["post"]),
         ("/admin/approvals/{approval_id}/reject", &["post"]),
         ("/v1/gateway/approvals/{approval_id}", &["get"]),
+        ("/v1/gateway/approvals", &["get"]),
         ("/admin/security/policies", &["get", "post"]),
         ("/admin/security/policies/{policy_id}", &["patch", "delete"]),
         ("/admin/security/incidents", &["get"]),
         ("/admin/security/incidents/{incident_id}", &["get", "patch"]),
         ("/admin/security/findings", &["get"]),
         ("/admin/security/events", &["get"]),
+        ("/admin/security/patterns", &["get", "post"]),
+        (
+            "/admin/security/patterns/{pattern_id}",
+            &["patch", "delete"],
+        ),
+        ("/admin/security/incidents/{incident_id}/timeline", &["get"]),
+        ("/admin/tenants", &["get"]),
+        ("/admin/projects", &["get", "post"]),
+        ("/admin/projects/{id}", &["patch", "delete"]),
+        ("/auth/tenants/{tenant_id}/members", &["get"]),
+        (
+            "/auth/tenants/{tenant_id}/members/{user_id}",
+            &["patch", "delete"],
+        ),
+        ("/auth/tenants/{tenant_id}/invitations", &["get", "post"]),
+        (
+            "/auth/tenants/{tenant_id}/invitations/{invitation_id}",
+            &["delete"],
+        ),
+        ("/auth/tenants/{tenant_id}", &["get", "patch", "delete"]),
+        ("/admin/virtual-keys", &["get", "post"]),
+        ("/admin/providers", &["get", "post"]),
+        ("/admin/providers/{id}", &["patch", "delete"]),
+        ("/admin/providers/{id}/models", &["get"]),
+        ("/admin/providers/{id}/check", &["post"]),
+        ("/admin/model-routes", &["get", "post"]),
+        ("/admin/model-routes/{id}", &["patch", "delete"]),
+        ("/admin/model-prices", &["get", "post"]),
+        ("/admin/model-prices/{id}", &["patch", "delete"]),
+        ("/admin/policies", &["get", "post"]),
+        ("/admin/policies/{id}", &["patch", "delete"]),
+        ("/admin/quota-limits", &["get", "post"]),
+        ("/admin/quota-limits/{id}", &["patch", "delete"]),
+        ("/admin/usage/summary", &["get"]),
+        ("/admin/usage/series", &["get"]),
+        ("/admin/usage/events", &["get"]),
+        ("/admin/usage/breakdowns", &["get"]),
+        ("/admin/provider-health", &["get"]),
+        ("/admin/usage/reservations", &["get"]),
+        ("/admin/usage/mcp-invocations", &["get"]),
+        ("/admin/audit-events", &["get"]),
+        ("/admin/summary", &["get"]),
+        ("/admin/system", &["get"]),
+        ("/admin/billing/webhooks", &["get"]),
+        ("/admin/billing/outbox", &["get"]),
+        ("/admin/billing/overview", &["get"]),
+        ("/admin/billing/invoices", &["get"]),
+        ("/admin/billing/outbox/{event_id}/retry", &["post"]),
     ]
 }
 
@@ -218,8 +295,23 @@ struct InvitationRequest {
 }
 
 #[derive(Deserialize)]
+struct CreateTenantRequest {
+    name: String,
+}
+
+#[derive(Deserialize)]
 struct AcceptInvitationRequest {
     token: String,
+}
+
+#[derive(Deserialize)]
+struct MemberUpdateRequest {
+    role: gateway_auth::TenantRole,
+}
+
+#[derive(Deserialize)]
+struct DeleteOrganizationRequest {
+    confirmation: String,
 }
 
 async fn signup(
@@ -260,6 +352,7 @@ async fn session(
     Ok(Json(json!({
         "user_id": session.user_id,
         "email": session.email,
+        "gateway_admin": session.gateway_admin,
         "expires_at": session.expires_at,
         "memberships": session.memberships,
     })))
@@ -279,10 +372,7 @@ async fn create_invitation(
     headers: HeaderMap,
     Json(input): Json<InvitationRequest>,
 ) -> Result<(StatusCode, Json<Value>), ApiError> {
-    let credential = bearer_credential(&headers)?;
-    if !credential.ends_with(&format!(".{tenant_id}")) {
-        return Err(ApiError::forbidden("tenant context mismatch"));
-    }
+    let credential = tenant_credential(&headers, tenant_id)?;
     let invitation = web_auth(&state)?
         .invite(credential, &input.email, input.role)
         .await
@@ -294,6 +384,109 @@ async fn create_invitation(
             "token": invitation.token.expose(),
             "expires_at": invitation.expires_at,
         })),
+    ))
+}
+
+async fn list_invitations(
+    State(state): State<AppState>,
+    Path(tenant_id): Path<Uuid>,
+    headers: HeaderMap,
+) -> Result<Json<Value>, ApiError> {
+    let invitations = web_auth(&state)?
+        .pending_invitations(tenant_credential(&headers, tenant_id)?)
+        .await
+        .map_err(map_web_auth)?;
+    Ok(Json(json!({ "data": invitations, "next_cursor": null })))
+}
+
+async fn revoke_invitation(
+    State(state): State<AppState>,
+    Path((tenant_id, invitation_id)): Path<(Uuid, Uuid)>,
+    headers: HeaderMap,
+) -> Result<StatusCode, ApiError> {
+    web_auth(&state)?
+        .revoke_invitation(tenant_credential(&headers, tenant_id)?, invitation_id)
+        .await
+        .map_err(map_web_auth)?;
+    Ok(StatusCode::NO_CONTENT)
+}
+
+async fn organization(
+    State(state): State<AppState>,
+    Path(tenant_id): Path<Uuid>,
+    headers: HeaderMap,
+) -> Result<Json<Value>, ApiError> {
+    web_auth(&state)?
+        .organization(tenant_credential(&headers, tenant_id)?)
+        .await
+        .map(|organization| Json(json!(organization)))
+        .map_err(map_web_auth)
+}
+
+async fn update_organization(
+    State(state): State<AppState>,
+    Path(tenant_id): Path<Uuid>,
+    headers: HeaderMap,
+    Json(input): Json<OrganizationUpdate>,
+) -> Result<Json<Value>, ApiError> {
+    let version = header_version(&headers)?;
+    web_auth(&state)?
+        .update_organization(tenant_credential(&headers, tenant_id)?, version, input)
+        .await
+        .map(|organization| Json(json!(organization)))
+        .map_err(map_web_auth)
+}
+
+async fn delete_organization(
+    State(state): State<AppState>,
+    Path(tenant_id): Path<Uuid>,
+    headers: HeaderMap,
+    Json(input): Json<DeleteOrganizationRequest>,
+) -> Result<StatusCode, ApiError> {
+    web_auth(&state)?
+        .delete_organization(tenant_credential(&headers, tenant_id)?, &input.confirmation)
+        .await
+        .map_err(map_web_auth)?;
+    Ok(StatusCode::NO_CONTENT)
+}
+
+async fn update_member(
+    State(state): State<AppState>,
+    Path((tenant_id, user_id)): Path<(Uuid, Uuid)>,
+    headers: HeaderMap,
+    Json(input): Json<MemberUpdateRequest>,
+) -> Result<StatusCode, ApiError> {
+    web_auth(&state)?
+        .update_member(tenant_credential(&headers, tenant_id)?, user_id, input.role)
+        .await
+        .map_err(map_web_auth)?;
+    Ok(StatusCode::NO_CONTENT)
+}
+
+async fn remove_member(
+    State(state): State<AppState>,
+    Path((tenant_id, user_id)): Path<(Uuid, Uuid)>,
+    headers: HeaderMap,
+) -> Result<StatusCode, ApiError> {
+    web_auth(&state)?
+        .remove_member(tenant_credential(&headers, tenant_id)?, user_id)
+        .await
+        .map_err(map_web_auth)?;
+    Ok(StatusCode::NO_CONTENT)
+}
+
+async fn create_tenant(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Json(input): Json<CreateTenantRequest>,
+) -> Result<(StatusCode, Json<Value>), ApiError> {
+    let membership = web_auth(&state)?
+        .create_tenant(bearer_credential(&headers)?, &input.name)
+        .await
+        .map_err(map_web_auth)?;
+    Ok((
+        StatusCode::CREATED,
+        Json(json!({ "membership": membership })),
     ))
 }
 
@@ -325,12 +518,29 @@ fn web_auth(state: &AppState) -> Result<&WebAuthService, ApiError> {
         .ok_or_else(|| ApiError::service_unavailable("web authentication unavailable"))
 }
 
+fn tenant_credential(headers: &HeaderMap, tenant_id: Uuid) -> Result<&str, ApiError> {
+    let credential = bearer_credential(headers)?;
+    if !credential.ends_with(&format!(".{tenant_id}")) {
+        return Err(ApiError::forbidden("tenant context mismatch"));
+    }
+    Ok(credential)
+}
+
+fn header_version(headers: &HeaderMap) -> Result<u64, ApiError> {
+    headers
+        .get("if-match")
+        .and_then(|value| value.to_str().ok())
+        .and_then(|value| value.trim_matches('"').parse().ok())
+        .ok_or_else(|| ApiError::invalid("If-Match organization version is required"))
+}
+
 fn map_web_auth(error: WebAuthError) -> ApiError {
     match error {
         WebAuthError::Invalid => ApiError::invalid("invalid authentication input"),
         WebAuthError::InvalidCredentials => ApiError::unauthorized(),
         WebAuthError::Conflict => ApiError::conflict("identity already exists"),
         WebAuthError::Forbidden => ApiError::forbidden("operation is not permitted"),
+        WebAuthError::NotFound => ApiError::not_found("identity record not found"),
         WebAuthError::Hashing | WebAuthError::Unavailable => {
             ApiError::service_unavailable("authentication unavailable")
         }
@@ -342,16 +552,19 @@ async fn models(
     State(state): State<AppState>,
     headers: HeaderMap,
 ) -> Result<Json<ModelList>, ApiError> {
-    authenticate(&state, &headers).await?;
-    let route = state.gateway.model_route();
+    let principal = authenticate(&state, &headers).await?;
+    let aliases = state.gateway.model_aliases(&principal);
     Ok(Json(ModelList {
         object: "list",
-        data: vec![ModelObject {
-            id: route.requested_model.clone(),
-            object: "model",
-            created: 0,
-            owned_by: "tuenel",
-        }],
+        data: aliases
+            .into_iter()
+            .map(|id| ModelObject {
+                id,
+                object: "model",
+                created: 0,
+                owned_by: "tuenel",
+            })
+            .collect(),
     }))
 }
 
@@ -460,7 +673,25 @@ async fn create_virtual_key(
     headers: HeaderMap,
     Json(input): Json<CreateVirtualKeyRequest>,
 ) -> Result<(StatusCode, Json<CreateVirtualKeyResponse>), ApiError> {
-    let principal = admin_principal(&state, &headers).await?;
+    let principal = write_admin_principal(&state, &headers).await?;
+    let display_name = input
+        .display_name
+        .as_deref()
+        .map(str::trim)
+        .filter(|value| !value.is_empty() && value.len() <= 100)
+        .map(str::to_owned);
+    if input.display_name.is_some() && display_name.is_none() {
+        return Err(ApiError::invalid(
+            "display_name must be between 1 and 100 characters",
+        ));
+    }
+    if input
+        .project_id
+        .as_deref()
+        .is_some_and(|value| value.is_empty() || value.len() > 255)
+    {
+        return Err(ApiError::invalid("project_id is invalid"));
+    }
     let daily_token_limit = input
         .daily_token_limit
         .unwrap_or(state.default_virtual_key_daily_tokens);
@@ -469,6 +700,18 @@ async fn create_virtual_key(
             "daily_token_limit must be greater than zero",
         ));
     }
+    if input.daily_request_limit.is_some_and(|limit| limit == 0)
+        || input
+            .monthly_budget
+            .is_some_and(|budget| !budget.is_finite() || budget <= 0.0)
+        || input.allowed_models.len() > 100
+        || input
+            .allowed_models
+            .iter()
+            .any(|model| model.is_empty() || model.len() > 255)
+    {
+        return Err(ApiError::invalid("API key limits are invalid"));
+    }
     if input.expires_at.is_some_and(|time| time <= Utc::now()) {
         return Err(ApiError::invalid("expires_at must be in the future"));
     }
@@ -476,11 +719,17 @@ async fn create_virtual_key(
         .keys
         .issue(NewVirtualKey {
             tenant_id: principal.tenant_id,
+            display_name,
             project_id: input.project_id,
             user_id: input.user_id,
             scopes: input.scopes,
             expires_at: input.expires_at,
             daily_token_limit,
+            allowed_models: input.allowed_models,
+            daily_request_limit: input.daily_request_limit,
+            monthly_budget: input
+                .monthly_budget
+                .and_then(rust_decimal::Decimal::from_f64),
         })
         .await
         .map_err(|_| ApiError::internal())?;
@@ -505,12 +754,13 @@ async fn create_virtual_key(
 async fn revoke_virtual_key(
     State(state): State<AppState>,
     Path(id): Path<Uuid>,
+    Query(query): Query<KeyScopeQuery>,
     headers: HeaderMap,
 ) -> Result<StatusCode, ApiError> {
-    let principal = admin_principal(&state, &headers).await?;
+    let principal = write_admin_principal(&state, &headers).await?;
     if state
         .keys
-        .revoke(&principal.tenant_id, id)
+        .revoke(&principal.tenant_id, query.project_id.as_deref(), id)
         .await
         .map_err(|_| ApiError::internal())?
     {
@@ -520,17 +770,53 @@ async fn revoke_virtual_key(
     }
 }
 
+#[derive(Deserialize)]
+struct KeyScopeQuery {
+    project_id: Option<String>,
+}
+
 async fn authenticate(state: &AppState, headers: &HeaderMap) -> Result<Principal, ApiError> {
     let credential = bearer_credential(headers)?;
-    state
-        .authenticator
-        .authenticate(credential)
-        .await
-        .map_err(|error| match error {
-            AuthError::UnknownTenant => ApiError::forbidden("tenant is not provisioned"),
-            AuthError::Unavailable => ApiError::service_unavailable("authentication unavailable"),
-            AuthError::Invalid => ApiError::unauthorized(),
-        })
+    let principal =
+        state
+            .authenticator
+            .authenticate(credential)
+            .await
+            .map_err(|error| match error {
+                AuthError::UnknownTenant => ApiError::forbidden("tenant is not provisioned"),
+                AuthError::Unavailable => {
+                    ApiError::service_unavailable("authentication unavailable")
+                }
+                AuthError::Invalid => ApiError::unauthorized(),
+            })?;
+    bind_project(principal, headers)
+}
+
+fn bind_project(mut principal: Principal, headers: &HeaderMap) -> Result<Principal, ApiError> {
+    let Some(value) = headers.get("x-tuenel-project-id") else {
+        return Ok(principal);
+    };
+    let project_id = Uuid::parse_str(
+        value
+            .to_str()
+            .map_err(|_| ApiError::invalid("invalid project scope"))?,
+    )
+    .map_err(|_| ApiError::invalid("invalid project scope"))?
+    .to_string();
+    if let Some(bound) = &principal.project_id {
+        if Uuid::parse_str(bound).ok() != Uuid::parse_str(&project_id).ok() {
+            return Err(ApiError::forbidden(
+                "project scope does not match credential",
+            ));
+        }
+    } else if principal.authentication_method == AuthenticationMethod::WebSession {
+        principal.project_id = Some(project_id);
+    } else {
+        return Err(ApiError::forbidden(
+            "credential is not valid for this project",
+        ));
+    }
+    Ok(principal)
 }
 
 fn bearer_credential(headers: &HeaderMap) -> Result<&str, ApiError> {
@@ -553,6 +839,19 @@ async fn admin_principal(state: &AppState, headers: &HeaderMap) -> Result<Princi
         return Err(ApiError::forbidden("administrator role required"));
     }
     Ok(principal)
+}
+
+async fn write_admin_principal(
+    state: &AppState,
+    headers: &HeaderMap,
+) -> Result<Principal, ApiError> {
+    let principal = admin_principal(state, headers).await?;
+    principal
+        .roles
+        .iter()
+        .any(|role| role == &state.admin_role || matches!(role.as_str(), "owner" | "admin"))
+        .then_some(principal)
+        .ok_or_else(|| ApiError::forbidden("administrator write role required"))
 }
 
 async fn inference_principal(state: &AppState, headers: &HeaderMap) -> Result<Principal, ApiError> {
@@ -1093,6 +1392,8 @@ pub struct ModelObject {
 /// Tenant-scoped Virtual Key issuance request.
 #[derive(Debug, Deserialize, ToSchema)]
 pub struct CreateVirtualKeyRequest {
+    /// Human-readable non-secret label.
+    pub display_name: Option<String>,
     /// Optional project binding.
     pub project_id: Option<String>,
     /// Optional user binding.
@@ -1104,6 +1405,13 @@ pub struct CreateVirtualKeyRequest {
     pub expires_at: Option<DateTime<Utc>>,
     /// Daily token limit, or the configured default.
     pub daily_token_limit: Option<u64>,
+    /// Public aliases this key may call; empty defers to normal policy.
+    #[serde(default)]
+    pub allowed_models: Vec<String>,
+    /// Optional daily request ceiling.
+    pub daily_request_limit: Option<u64>,
+    /// Optional monthly estimated-cost ceiling in USD.
+    pub monthly_budget: Option<f64>,
 }
 
 /// One-time Virtual Key issuance response.
@@ -1325,7 +1633,10 @@ impl IntoResponse for ApiError {
 mod tests {
     use std::path::Path;
 
-    use super::{ChatCompletionRequest, StopInput, openapi_document};
+    use axum::http::HeaderMap;
+    use gateway_types::{AuthenticationMethod, Principal};
+
+    use super::{ChatCompletionRequest, StopInput, bind_project, openapi_document};
 
     #[test]
     fn committed_openapi_matches_generated_document() {
@@ -1346,5 +1657,31 @@ mod tests {
         .unwrap();
         assert!(request.into_gateway(128, 4096).is_err());
         assert_eq!(StopInput::One("stop".into()).into_vec(), vec!["stop"]);
+    }
+
+    #[test]
+    fn browser_sessions_may_bind_an_explicit_project() {
+        let mut headers = HeaderMap::new();
+        headers.insert(
+            "x-tuenel-project-id",
+            "01900000-0000-7000-8000-000000000002".parse().unwrap(),
+        );
+        let principal = Principal {
+            principal_id: "user-1".into(),
+            tenant_id: "01900000-0000-7000-8000-000000000001".into(),
+            project_id: None,
+            user_id: Some("user-1".into()),
+            roles: vec!["admin".into()],
+            scopes: vec![],
+            authentication_method: AuthenticationMethod::WebSession,
+            virtual_key_id: None,
+        };
+        assert_eq!(
+            bind_project(principal, &headers)
+                .unwrap()
+                .project_id
+                .as_deref(),
+            Some("01900000-0000-7000-8000-000000000002")
+        );
     }
 }

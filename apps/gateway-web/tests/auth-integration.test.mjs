@@ -28,7 +28,8 @@ test("session cookie is encrypted and hardened", () => {
 
 test("gateway BFF strips caller credentials and allowlists paths", () => {
   const bff = read("app/api/gateway/[...path]/route.ts")
-  assert.match(bff, /headers\.delete\("authorization"\)/)
+  assert.match(bff, /const headers = new Headers\(\)/)
+  assert.match(bff, /for \(const name of \[/)
   assert.match(bff, /Invalid request origin/)
   assert.match(bff, /Gateway path is not allowed/)
   assert.match(bff, /credential}\.\$\{tenant/)

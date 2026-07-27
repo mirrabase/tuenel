@@ -9,16 +9,18 @@ use axum::{
 };
 use chrono::Utc;
 use gateway_mcp::{ApprovalReference, McpError, McpPolicy, McpPolicyRecord, McpServerRecord};
-use gateway_security::{SecurityPolicy, SecurityPolicyRecord};
+use gateway_security::{
+    SecurityCustomPattern, SecurityPolicy, SecurityPolicyRecord, validate_custom_pattern,
+};
 use gateway_types::{
     ApprovalId, ApprovalStatus, GatewayMcpInvocation, IncidentId, IncidentStatus, McpPolicyId,
-    McpServerId, McpTransportType, SecurityPolicyId,
+    McpServerId, McpTransportType, SecurityCategory, SecurityPolicyId, ToolAnnotations,
 };
 use serde::Deserialize;
 use serde_json::{Value, json};
 use uuid::Uuid;
 
-use super::{ApiError, AppState, RequestId, admin_principal, authenticate};
+use super::{ApiError, AppState, RequestId, admin_principal, authenticate, write_admin_principal};
 
 pub(super) fn routes() -> Router<AppState> {
     Router::new()
@@ -38,6 +40,10 @@ pub(super) fn routes() -> Router<AppState> {
         )
         .route("/admin/mcp/tools", get(admin_tools))
         .route(
+            "/admin/mcp/tools/{server_id}/{tool_name}/annotations",
+            patch(update_tool_annotations),
+        )
+        .route(
             "/admin/mcp/policies",
             get(mcp_policies).post(create_mcp_policy),
         )
@@ -54,6 +60,7 @@ pub(super) fn routes() -> Router<AppState> {
         .route("/admin/approvals/{approval_id}/approve", post(approve))
         .route("/admin/approvals/{approval_id}/reject", post(reject))
         .route("/v1/gateway/approvals/{approval_id}", get(public_approval))
+        .route("/v1/gateway/approvals", get(public_approvals))
         .route(
             "/admin/security/policies",
             get(security_policies).post(create_security_policy),
@@ -69,6 +76,18 @@ pub(super) fn routes() -> Router<AppState> {
         )
         .route("/admin/security/findings", get(findings))
         .route("/admin/security/events", get(security_events))
+        .route(
+            "/admin/security/patterns",
+            get(security_patterns).post(create_security_pattern),
+        )
+        .route(
+            "/admin/security/patterns/{pattern_id}",
+            patch(update_security_pattern).delete(delete_security_pattern),
+        )
+        .route(
+            "/admin/security/incidents/{incident_id}/timeline",
+            get(incident_timeline),
+        )
 }
 
 #[derive(Debug, Deserialize)]
@@ -93,7 +112,7 @@ async fn create_server(
     headers: HeaderMap,
     Json(input): Json<CreateServer>,
 ) -> Result<(StatusCode, Json<Value>), ApiError> {
-    let principal = admin_principal(&state, &headers).await?;
+    let principal = write_admin_principal(&state, &headers).await?;
     validate_server_input(&input)?;
     let server_id = McpServerId::new();
     let secrets = state
@@ -207,7 +226,7 @@ async fn update_server(
     headers: HeaderMap,
     Json(input): Json<UpdateServer>,
 ) -> Result<Json<Value>, ApiError> {
-    let principal = admin_principal(&state, &headers).await?;
+    let principal = write_admin_principal(&state, &headers).await?;
     let mut server = registry(&state)?
         .admin_server_for(&principal.tenant_id, McpServerId(server_id))
         .await
@@ -311,7 +330,7 @@ async fn delete_server(
     Path(server_id): Path<Uuid>,
     headers: HeaderMap,
 ) -> Result<StatusCode, ApiError> {
-    let principal = admin_principal(&state, &headers).await?;
+    let principal = write_admin_principal(&state, &headers).await?;
     let server = registry(&state)?
         .admin_server_for(&principal.tenant_id, McpServerId(server_id))
         .await
@@ -349,7 +368,7 @@ async fn refresh_server(
     Path(server_id): Path<Uuid>,
     headers: HeaderMap,
 ) -> Result<Json<Value>, ApiError> {
-    let principal = admin_principal(&state, &headers).await?;
+    let principal = write_admin_principal(&state, &headers).await?;
     let tools = registry(&state)?
         .refresh(&principal, McpServerId(server_id))
         .await
@@ -374,7 +393,7 @@ async fn health_server(
     Path(server_id): Path<Uuid>,
     headers: HeaderMap,
 ) -> Result<Json<Value>, ApiError> {
-    let principal = admin_principal(&state, &headers).await?;
+    let principal = write_admin_principal(&state, &headers).await?;
     let health = registry(&state)?
         .health(&principal, McpServerId(server_id))
         .await
@@ -412,6 +431,41 @@ async fn admin_tools(
     Ok(Json(
         json!({"data":registry(&state)?.tools(&principal,None).await.map_err(map_mcp)?}),
     ))
+}
+async fn update_tool_annotations(
+    State(state): State<AppState>,
+    Path((server_id, tool_name)): Path<(Uuid, String)>,
+    headers: HeaderMap,
+    Json(annotations): Json<ToolAnnotations>,
+) -> Result<Json<Value>, ApiError> {
+    let principal = write_admin_principal(&state, &headers).await?;
+    if !registry(&state)?
+        .update_tool_annotations(
+            &principal.tenant_id,
+            McpServerId(server_id),
+            &tool_name,
+            annotations.clone(),
+        )
+        .await
+        .map_err(map_mcp)?
+    {
+        return Err(ApiError::not_found("MCP tool not found"));
+    }
+    audit(&state)?
+        .emit(
+            format!("mcp.tool.annotations:{server_id}:{tool_name}"),
+            "mcp.tool.annotations.updated",
+            &principal,
+            None,
+            json!({"server_id":server_id,"tool_name":tool_name}),
+        )
+        .await
+        .map_err(|_| ApiError::internal())?;
+    Ok(Json(json!({
+        "server_id":server_id,
+        "tool_name":tool_name,
+        "annotations":annotations
+    })))
 }
 async fn public_servers(
     State(state): State<AppState>,
@@ -488,7 +542,7 @@ async fn create_mcp_policy(
     headers: HeaderMap,
     Json(input): Json<PolicyInput>,
 ) -> Result<(StatusCode, Json<Value>), ApiError> {
-    let principal = admin_principal(&state, &headers).await?;
+    let principal = write_admin_principal(&state, &headers).await?;
     validate_scope(&input.scope_kind)?;
     let now = Utc::now();
     let record = McpPolicyRecord {
@@ -522,7 +576,7 @@ async fn update_mcp_policy(
     headers: HeaderMap,
     Json(input): Json<PolicyInput>,
 ) -> Result<StatusCode, ApiError> {
-    let principal = admin_principal(&state, &headers).await?;
+    let principal = write_admin_principal(&state, &headers).await?;
     validate_scope(&input.scope_kind)?;
     let now = Utc::now();
     mcp_admin(&state)?
@@ -545,7 +599,7 @@ async fn delete_mcp_policy(
     Path(policy_id): Path<Uuid>,
     headers: HeaderMap,
 ) -> Result<StatusCode, ApiError> {
-    let principal = admin_principal(&state, &headers).await?;
+    let principal = write_admin_principal(&state, &headers).await?;
     if mcp_admin(&state)?
         .delete_mcp_policy(&principal.tenant_id, McpPolicyId(policy_id))
         .await
@@ -627,7 +681,7 @@ async fn decide_approval(
     reason: Option<String>,
     allow: bool,
 ) -> Result<Json<Value>, ApiError> {
-    let principal = admin_principal(&state, &headers).await?;
+    let principal = write_admin_principal(&state, &headers).await?;
     let value = approvals_service(&state)?
         .decide(
             &principal.tenant_id,
@@ -672,6 +726,26 @@ async fn public_approval(
         json!({"approval_id":request.approval_id,"status":request.status,"expires_at":request.expires_at}),
     ))
 }
+async fn public_approvals(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Query(query): Query<ListQuery>,
+) -> Result<Json<Value>, ApiError> {
+    let principal = authenticate(&state, &headers).await?;
+    let status = query.status.as_deref().map(parse_approval).transpose()?;
+    let data = approvals_service(&state)?
+        .list(
+            &principal.tenant_id,
+            status,
+            query.limit.unwrap_or(50).min(100),
+        )
+        .await
+        .map_err(|_| ApiError::internal())?
+        .into_iter()
+        .filter(|request| request.principal_id == principal.principal_id)
+        .collect::<Vec<_>>();
+    Ok(Json(json!({"data":data,"next_cursor":null})))
+}
 
 #[derive(Deserialize)]
 struct SecurityPolicyInput {
@@ -686,7 +760,7 @@ async fn create_security_policy(
     headers: HeaderMap,
     Json(input): Json<SecurityPolicyInput>,
 ) -> Result<(StatusCode, Json<Value>), ApiError> {
-    let principal = admin_principal(&state, &headers).await?;
+    let principal = write_admin_principal(&state, &headers).await?;
     validate_scope(&input.scope_kind)?;
     let now = Utc::now();
     let record = SecurityPolicyRecord {
@@ -721,7 +795,7 @@ async fn update_security_policy(
     headers: HeaderMap,
     Json(input): Json<SecurityPolicyInput>,
 ) -> Result<StatusCode, ApiError> {
-    let principal = admin_principal(&state, &headers).await?;
+    let principal = write_admin_principal(&state, &headers).await?;
     validate_scope(&input.scope_kind)?;
     let now = Utc::now();
     let record = SecurityPolicyRecord {
@@ -746,7 +820,7 @@ async fn delete_security_policy(
     Path(id): Path<Uuid>,
     headers: HeaderMap,
 ) -> Result<StatusCode, ApiError> {
-    let principal = admin_principal(&state, &headers).await?;
+    let principal = write_admin_principal(&state, &headers).await?;
     if security_repo(&state)?
         .delete_security_policy(&principal.tenant_id, SecurityPolicyId(id))
         .await
@@ -792,7 +866,7 @@ async fn update_incident(
     headers: HeaderMap,
     Json(input): Json<IncidentInput>,
 ) -> Result<Json<Value>, ApiError> {
-    let principal = admin_principal(&state, &headers).await?;
+    let principal = write_admin_principal(&state, &headers).await?;
     let status = parse_incident(&input.status)?;
     Ok(Json(json!(
         incidents_service(&state)?
@@ -826,6 +900,131 @@ async fn security_events(
     Ok(Json(
         json!({"data":security_repo(&state)?.security_events(&principal.tenant_id,query.limit.unwrap_or(100)).await.map_err(|_|ApiError::internal())?}),
     ))
+}
+
+#[derive(Deserialize)]
+struct SecurityPatternInput {
+    name: String,
+    category: SecurityCategory,
+    pattern: String,
+    #[serde(default = "default_true")]
+    enabled: bool,
+}
+
+async fn security_patterns(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+) -> Result<Json<Value>, ApiError> {
+    let principal = admin_principal(&state, &headers).await?;
+    let data = security_repo(&state)?
+        .custom_patterns(&principal.tenant_id)
+        .await
+        .map_err(|_| ApiError::internal())?;
+    Ok(Json(json!({"data":data,"next_cursor":null})))
+}
+
+async fn create_security_pattern(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Json(input): Json<SecurityPatternInput>,
+) -> Result<(StatusCode, Json<Value>), ApiError> {
+    let principal = write_admin_principal(&state, &headers).await?;
+    validate_custom_pattern(&input.name, &input.pattern)
+        .map_err(|_| ApiError::invalid("invalid custom security pattern"))?;
+    let now = Utc::now();
+    let record = SecurityCustomPattern {
+        pattern_id: Uuid::now_v7(),
+        tenant_id: principal.tenant_id,
+        name: input.name,
+        category: input.category,
+        pattern: input.pattern,
+        enabled: input.enabled,
+        version: 1,
+        created_at: now,
+        updated_at: now,
+    };
+    security_repo(&state)?
+        .insert_custom_pattern(record.clone())
+        .await
+        .map_err(|_| ApiError::conflict("custom pattern already exists"))?;
+    Ok((StatusCode::CREATED, Json(json!(record))))
+}
+
+async fn update_security_pattern(
+    State(state): State<AppState>,
+    Path(pattern_id): Path<Uuid>,
+    headers: HeaderMap,
+    Json(input): Json<SecurityPatternInput>,
+) -> Result<Json<Value>, ApiError> {
+    let principal = write_admin_principal(&state, &headers).await?;
+    validate_custom_pattern(&input.name, &input.pattern)
+        .map_err(|_| ApiError::invalid("invalid custom security pattern"))?;
+    let version = if_match(&headers)?;
+    let now = Utc::now();
+    let record = SecurityCustomPattern {
+        pattern_id,
+        tenant_id: principal.tenant_id,
+        name: input.name,
+        category: input.category,
+        pattern: input.pattern,
+        enabled: input.enabled,
+        version: version + 1,
+        created_at: now,
+        updated_at: now,
+    };
+    if !security_repo(&state)?
+        .update_custom_pattern(record.clone(), version)
+        .await
+        .map_err(|_| ApiError::internal())?
+    {
+        return Err(ApiError::conflict("custom pattern version conflict"));
+    }
+    Ok(Json(json!(record)))
+}
+
+async fn delete_security_pattern(
+    State(state): State<AppState>,
+    Path(pattern_id): Path<Uuid>,
+    headers: HeaderMap,
+) -> Result<StatusCode, ApiError> {
+    let principal = write_admin_principal(&state, &headers).await?;
+    if security_repo(&state)?
+        .delete_custom_pattern(&principal.tenant_id, pattern_id, if_match(&headers)?)
+        .await
+        .map_err(|_| ApiError::internal())?
+    {
+        Ok(StatusCode::NO_CONTENT)
+    } else {
+        Err(ApiError::conflict("custom pattern version conflict"))
+    }
+}
+
+async fn incident_timeline(
+    State(state): State<AppState>,
+    Path(incident_id): Path<Uuid>,
+    headers: HeaderMap,
+) -> Result<Json<Value>, ApiError> {
+    let principal = admin_principal(&state, &headers).await?;
+    let data = incidents_service(&state)?
+        .timeline(&principal.tenant_id, IncidentId(incident_id))
+        .await
+        .map_err(|_| ApiError::not_found("incident not found"))?;
+    Ok(Json(json!({"data":data,"next_cursor":null})))
+}
+
+fn if_match(headers: &HeaderMap) -> Result<u64, ApiError> {
+    headers
+        .get(axum::http::header::IF_MATCH)
+        .and_then(|value| value.to_str().ok())
+        .and_then(|value| value.trim_matches('"').parse().ok())
+        .ok_or_else(|| {
+            ApiError::new(
+                StatusCode::PRECONDITION_REQUIRED,
+                "invalid_request_error",
+                "if_match_required",
+                "If-Match resource version is required",
+            )
+        })
 }
 
 #[derive(Deserialize)]

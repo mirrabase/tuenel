@@ -3,7 +3,7 @@
 mod health;
 pub use health::{ProviderHealthMonitor, ProviderHealthRepository, ProviderHealthTracker};
 
-use std::{collections::HashMap, pin::Pin, sync::Arc};
+use std::{collections::HashMap, pin::Pin, sync::Arc, time::Duration};
 
 use async_trait::async_trait;
 use futures::Stream;
@@ -45,6 +45,36 @@ impl ProviderRegistry {
     }
     pub fn ids(&self) -> impl Iterator<Item = &str> {
         self.0.keys().map(String::as_str)
+    }
+
+    pub async fn check_health(
+        &self,
+        id: &str,
+        timeout: Duration,
+    ) -> Result<ProviderHealth, ProviderError> {
+        let provider = self.get(id).ok_or(ProviderError::Unavailable)?;
+        Ok(
+            match tokio::time::timeout(timeout, provider.health_check()).await {
+                Ok(Ok(health)) => health,
+                _ => ProviderHealth {
+                    status: ProviderHealthStatus::Unhealthy,
+                    consecutive_failures: 1,
+                    latest_success_at: None,
+                    latest_failure_at: Some(chrono::Utc::now()),
+                },
+            },
+        )
+    }
+
+    pub async fn list_models(
+        &self,
+        id: &str,
+        timeout: Duration,
+    ) -> Result<Vec<String>, ProviderError> {
+        let provider = self.get(id).ok_or(ProviderError::Unavailable)?;
+        tokio::time::timeout(timeout, provider.list_models())
+            .await
+            .map_err(|_| ProviderError::Timeout)?
     }
 }
 
@@ -130,6 +160,11 @@ pub trait ModelProvider: Send + Sync {
             latest_success_at: None,
             latest_failure_at: None,
         })
+    }
+
+    /// List model identifiers currently available from the upstream provider.
+    async fn list_models(&self) -> Result<Vec<String>, ProviderError> {
+        Err(ProviderError::Unsupported)
     }
 
     /// Execute a non-streaming chat completion.
