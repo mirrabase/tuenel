@@ -115,7 +115,7 @@ jobs:
         with:
           context: .
           file: ./Dockerfile
-          platforms: linux/amd64,linux/arm64
+          platforms: linux/amd64
           push: true
           tags: ${{ steps.gateway-meta.outputs.tags }}
           labels: ${{ steps.gateway-meta.outputs.labels }}
@@ -138,7 +138,7 @@ jobs:
         with:
           context: ./apps/gateway-web
           file: ./apps/gateway-web/Dockerfile
-          platforms: linux/amd64,linux/arm64
+          platforms: linux/amd64
           push: true
           tags: ${{ steps.web-meta.outputs.tags }}
           labels: ${{ steps.web-meta.outputs.labels }}
