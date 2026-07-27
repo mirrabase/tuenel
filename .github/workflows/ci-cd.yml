@@ -101,7 +101,7 @@ jobs:
         id: gateway-meta
         uses: docker/metadata-action@v5
         with:
-          images: ghcr.io/omnimusha-suite/tuenel-gateway
+          images: ghcr.io/mirrabase/tuenel-gateway
           tags: |
             type=ref,event=branch
             type=ref,event=tag
@@ -124,7 +124,7 @@ jobs:
         id: web-meta
         uses: docker/metadata-action@v5
         with:
-          images: ghcr.io/omnimusha-suite/tuenel-gateway-web
+          images: ghcr.io/mirrabase/tuenel-gateway-web
           tags: |
             type=ref,event=branch
             type=ref,event=tag

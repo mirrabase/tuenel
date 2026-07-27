@@ -114,7 +114,7 @@ services:
     logging: *default-logging
 
   gateway:
-    image: ghcr.io/omnimusha-suite/tuenel-gateway:${TUENEL_VERSION:?Pin TUENEL_VERSION in .env.production}
+    image: ghcr.io/mirrabase/tuenel-gateway:${TUENEL_VERSION:?Pin TUENEL_VERSION in .env.production}
     restart: unless-stopped
     init: true
     environment:
@@ -171,7 +171,7 @@ services:
     logging: *default-logging
 
   gateway-web:
-    image: ghcr.io/omnimusha-suite/tuenel-gateway-web:${TUENEL_VERSION:?Pin TUENEL_VERSION in .env.production}
+    image: ghcr.io/mirrabase/tuenel-gateway-web:${TUENEL_VERSION:?Pin TUENEL_VERSION in .env.production}
     restart: unless-stopped
     init: true
     environment:
