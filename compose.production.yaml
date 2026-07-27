@@ -8,6 +8,7 @@ x-logging: &default-logging
 
 services:
   docker-socket-proxy:
+    profiles: [bundled-traefik]
     image: ghcr.io/tecnativa/docker-socket-proxy:v0.4.2
     restart: unless-stopped
     environment:
@@ -28,6 +29,7 @@ services:
     logging: *default-logging
 
   traefik:
+    profiles: [bundled-traefik]
     image: traefik:v3.7
     restart: unless-stopped
     depends_on:
@@ -39,20 +41,20 @@ services:
       - --providers.docker=true
       - --providers.docker.endpoint=tcp://docker-socket-proxy:2375
       - --providers.docker.exposedbydefault=false
-      - --providers.docker.network=${COMPOSE_PROJECT_NAME:-tuenel}_edge
+      - --providers.docker.network=${TRAEFIK_NETWORK:-${COMPOSE_PROJECT_NAME:-tuenel}_edge}
       - --entrypoints.web.address=:80
-      - --entrypoints.web.http.redirections.entrypoint.to=websecure
+      - --entrypoints.web.http.redirections.entrypoint.to=${TRAEFIK_SECURE_ENTRYPOINT:-websecure}
       - --entrypoints.web.http.redirections.entrypoint.scheme=https
       - --entrypoints.web.http.redirections.entrypoint.permanent=true
-      - --entrypoints.websecure.address=:443
-      - --entrypoints.websecure.http.tls=true
-      - --entrypoints.websecure.transport.respondingtimeouts.readtimeout=180s
-      - --entrypoints.websecure.transport.respondingtimeouts.writetimeout=0s
-      - --entrypoints.websecure.transport.respondingtimeouts.idletimeout=180s
-      - --certificatesresolvers.letsencrypt.acme.email=${ACME_EMAIL:?Set ACME_EMAIL in .env.production}
-      - --certificatesresolvers.letsencrypt.acme.storage=/letsencrypt/acme.json
-      - --certificatesresolvers.letsencrypt.acme.keytype=EC256
-      - --certificatesresolvers.letsencrypt.acme.httpchallenge.entrypoint=web
+      - --entrypoints.${TRAEFIK_SECURE_ENTRYPOINT:-websecure}.address=:443
+      - --entrypoints.${TRAEFIK_SECURE_ENTRYPOINT:-websecure}.http.tls=true
+      - --entrypoints.${TRAEFIK_SECURE_ENTRYPOINT:-websecure}.transport.respondingtimeouts.readtimeout=180s
+      - --entrypoints.${TRAEFIK_SECURE_ENTRYPOINT:-websecure}.transport.respondingtimeouts.writetimeout=0s
+      - --entrypoints.${TRAEFIK_SECURE_ENTRYPOINT:-websecure}.transport.respondingtimeouts.idletimeout=180s
+      - --certificatesresolvers.${TRAEFIK_CERTRESOLVER:-letsencrypt}.acme.email=${ACME_EMAIL:?Set ACME_EMAIL in .env.production}
+      - --certificatesresolvers.${TRAEFIK_CERTRESOLVER:-letsencrypt}.acme.storage=/letsencrypt/acme.json
+      - --certificatesresolvers.${TRAEFIK_CERTRESOLVER:-letsencrypt}.acme.keytype=EC256
+      - --certificatesresolvers.${TRAEFIK_CERTRESOLVER:-letsencrypt}.acme.httpchallenge.entrypoint=web
       - --log.level=${TRAEFIK_LOG_LEVEL:-INFO}
     ports:
       - 80:80
@@ -144,11 +146,11 @@ services:
       - "8080"
     labels:
       - traefik.enable=true
-      - traefik.docker.network=${COMPOSE_PROJECT_NAME:-tuenel}_edge
+      - traefik.docker.network=${TRAEFIK_NETWORK:-${COMPOSE_PROJECT_NAME:-tuenel}_edge}
       - traefik.http.routers.tuenel-api.rule=Host(`${TUENEL_API_DOMAIN:?Set TUENEL_API_DOMAIN in .env.production}`) && (PathPrefix(`/v1`) || Path(`/mcp`) || Path(`/health`) || Path(`/ready`) || Path(`/openapi.json`))
-      - traefik.http.routers.tuenel-api.entrypoints=websecure
+      - traefik.http.routers.tuenel-api.entrypoints=${TRAEFIK_SECURE_ENTRYPOINT:-websecure}
       - traefik.http.routers.tuenel-api.tls=true
-      - traefik.http.routers.tuenel-api.tls.certresolver=letsencrypt
+      - traefik.http.routers.tuenel-api.tls.certresolver=${TRAEFIK_CERTRESOLVER:-letsencrypt}
       - traefik.http.routers.tuenel-api.middlewares=tuenel-secure-headers@docker
       - traefik.http.routers.tuenel-api.service=tuenel-api
       - traefik.http.services.tuenel-api.loadbalancer.server.port=8080
@@ -187,11 +189,11 @@ services:
       - "3000"
     labels:
       - traefik.enable=true
-      - traefik.docker.network=${COMPOSE_PROJECT_NAME:-tuenel}_edge
+      - traefik.docker.network=${TRAEFIK_NETWORK:-${COMPOSE_PROJECT_NAME:-tuenel}_edge}
       - traefik.http.routers.tuenel-web.rule=Host(`${TUENEL_WEB_DOMAIN:?Set TUENEL_WEB_DOMAIN in .env.production}`)
-      - traefik.http.routers.tuenel-web.entrypoints=websecure
+      - traefik.http.routers.tuenel-web.entrypoints=${TRAEFIK_SECURE_ENTRYPOINT:-websecure}
       - traefik.http.routers.tuenel-web.tls=true
-      - traefik.http.routers.tuenel-web.tls.certresolver=letsencrypt
+      - traefik.http.routers.tuenel-web.tls.certresolver=${TRAEFIK_CERTRESOLVER:-letsencrypt}
       - traefik.http.routers.tuenel-web.middlewares=tuenel-secure-headers@docker,tuenel-compress@docker
       - traefik.http.routers.tuenel-web.service=tuenel-web
       - traefik.http.services.tuenel-web.loadbalancer.server.port=3000
@@ -208,7 +210,8 @@ services:
 
 networks:
   edge:
-    name: ${COMPOSE_PROJECT_NAME:-tuenel}_edge
+    name: ${TRAEFIK_NETWORK:-${COMPOSE_PROJECT_NAME:-tuenel}_edge}
+    external: ${TRAEFIK_EXISTING:-false}
   backend:
     name: ${COMPOSE_PROJECT_NAME:-tuenel}_backend
     internal: true
