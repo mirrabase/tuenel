@@ -10,6 +10,8 @@ POSTGRES_PASSWORD=test
 DATABASE_URL=postgres://gateway:test@postgres:5432/gateway
 GATEWAY_CREDENTIALS_MASTER_KEY=AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=
 WEB_SESSION_SECRET=01234567890123456789012345678901
+TRAEFIK_EXISTING=false
+TRAEFIK_NETWORK=tuenel_edge
 EOF
 
 services=$(docker compose --env-file "$env_file" config --services)
@@ -37,7 +39,7 @@ production_services=$(
   TUENEL_API_DOMAIN=api.tuenel.example.com \
   ACME_EMAIL=admin@example.com \
   TUENEL_VERSION=v1.0.0 \
-  docker compose --env-file "$env_file" -f compose.production.yaml config --services
+  docker compose --env-file "$env_file" -f compose.production.yaml --profile bundled-traefik config --services
 )
 [ "$(printf '%s\n' "$production_services" | wc -l)" -eq 6 ]
 for service in docker-socket-proxy traefik postgres redis gateway gateway-web; do
@@ -49,7 +51,7 @@ production=$(
   TUENEL_API_DOMAIN=api.tuenel.example.com \
   ACME_EMAIL=admin@example.com \
   TUENEL_VERSION=v1.0.0 \
-  docker compose --env-file "$env_file" -f compose.production.yaml config
+  docker compose --env-file "$env_file" -f compose.production.yaml --profile bundled-traefik config
 )
 [ "$(printf '%s\n' "$production" | grep -c 'published:')" -eq 2 ]
 printf '%s\n' "$production" | grep -q 'published: "80"'
@@ -64,6 +66,19 @@ if printf '%s\n' "$production" | grep -Eq 'PathPrefix\\(`/admin`\\)|mock|bootstr
   exit 1
 fi
 if docker compose --env-file "$empty_env" -f compose.production.yaml config >/dev/null 2>&1; then
+  exit 1
+fi
+
+existing_services=$(
+  TUENEL_WEB_DOMAIN=tuenel.example.com \
+  TUENEL_API_DOMAIN=api.tuenel.example.com \
+  ACME_EMAIL=admin@example.com \
+  TUENEL_VERSION=v1.0.0 \
+  TRAEFIK_EXISTING=true \
+  TRAEFIK_NETWORK=existing_edge \
+  docker compose --env-file "$env_file" -f compose.production.yaml config --services
+)
+if printf '%s\n' "$existing_services" | grep -Eq 'traefik|docker-socket-proxy'; then
   exit 1
 fi
 

@@ -2,15 +2,7 @@ name: CI/CD
 
 on:
   push:
-    branches:
-      - development
-      - main
-    tags:
-      - "v*"
-  pull_request:
-    branches:
-      - development
-      - main
+    branches: [main]
 
 permissions:
   contents: read
@@ -151,3 +143,123 @@ jobs:
           push: true
           tags: ${{ steps.web-meta.outputs.tags }}
           labels: ${{ steps.web-meta.outputs.labels }}
+
+  deploy:
+    name: Deploy release to VM
+    needs: publish
+    if: github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    environment: production
+    steps:
+      - name: Checkout deployment files
+        uses: actions/checkout@v4
+
+      - name: Configure SSH
+        env:
+          VM_SSH_KEY: ${{ secrets.VM_SSH_KEY }}
+          VM_KNOWN_HOSTS: ${{ secrets.VM_KNOWN_HOSTS }}
+        run: |
+          install -d -m 700 ~/.ssh
+          printf '%s\n' "$VM_SSH_KEY" > ~/.ssh/tuenel_deploy
+          printf '%s\n' "$VM_KNOWN_HOSTS" > ~/.ssh/known_hosts
+          chmod 600 ~/.ssh/tuenel_deploy ~/.ssh/known_hosts
+
+      - name: Copy production Compose file
+        env:
+          VM_HOST: ${{ secrets.VM_HOST }}
+          VM_USER: ${{ secrets.VM_USER }}
+        run: |
+          ssh -i ~/.ssh/tuenel_deploy "$VM_USER@$VM_HOST" \
+            'install -d -m 755 /opt/tuenel'
+          scp -i ~/.ssh/tuenel_deploy \
+            compose.production.yaml \
+            "$VM_USER@$VM_HOST:/opt/tuenel/compose.production.yaml"
+
+      - name: Sync production environment
+        env:
+          VM_HOST: ${{ secrets.VM_HOST }}
+          VM_USER: ${{ secrets.VM_USER }}
+          COMPOSE_PROJECT_NAME: ${{ vars.COMPOSE_PROJECT_NAME }}
+          TRAEFIK_EXISTING: ${{ vars.TRAEFIK_EXISTING }}
+          TRAEFIK_NETWORK: ${{ vars.TRAEFIK_NETWORK }}
+          TRAEFIK_SECURE_ENTRYPOINT: ${{ vars.TRAEFIK_SECURE_ENTRYPOINT }}
+          TRAEFIK_CERTRESOLVER: ${{ vars.TRAEFIK_CERTRESOLVER }}
+          TUENEL_WEB_DOMAIN: ${{ vars.TUENEL_WEB_DOMAIN }}
+          TUENEL_API_DOMAIN: ${{ vars.TUENEL_API_DOMAIN }}
+          ACME_EMAIL: ${{ vars.ACME_EMAIL }}
+          POSTGRES_DB: ${{ vars.POSTGRES_DB }}
+          POSTGRES_USER: ${{ vars.POSTGRES_USER }}
+          POSTGRES_PASSWORD: ${{ secrets.POSTGRES_PASSWORD }}
+          DATABASE_URL: ${{ secrets.DATABASE_URL }}
+          GATEWAY_CREDENTIALS_MASTER_KEY: ${{ secrets.GATEWAY_CREDENTIALS_MASTER_KEY }}
+          WEB_SESSION_SECRET: ${{ secrets.WEB_SESSION_SECRET }}
+          OIDC_ISSUER: ${{ vars.OIDC_ISSUER }}
+          OIDC_AUDIENCE: ${{ vars.OIDC_AUDIENCE }}
+          OIDC_JWKS_URL: ${{ vars.OIDC_JWKS_URL }}
+          OIDC_ADMIN_ROLE: ${{ vars.OIDC_ADMIN_ROLE }}
+          UPSTREAM_BASE_URL: ${{ vars.UPSTREAM_BASE_URL }}
+          UPSTREAM_API_KEY: ${{ secrets.UPSTREAM_API_KEY }}
+          UPSTREAM_MODEL: ${{ vars.UPSTREAM_MODEL }}
+          GATEWAY_MODEL_ALIAS: ${{ vars.GATEWAY_MODEL_ALIAS }}
+          DEFAULT_VIRTUAL_KEY_DAILY_TOKENS: ${{ vars.DEFAULT_VIRTUAL_KEY_DAILY_TOKENS }}
+          RUST_LOG: ${{ vars.RUST_LOG }}
+          MCP_ENABLED: ${{ vars.MCP_ENABLED }}
+          TRAEFIK_LOG_LEVEL: ${{ vars.TRAEFIK_LOG_LEVEL }}
+          TUENEL_VERSION: ${{ github.ref_name }}
+        run: |
+          set -o pipefail
+          {
+            printf 'COMPOSE_PROJECT_NAME=%s\n' "$COMPOSE_PROJECT_NAME"
+            printf 'TRAEFIK_EXISTING=%s\n' "$TRAEFIK_EXISTING"
+            printf 'TRAEFIK_NETWORK=%s\n' "$TRAEFIK_NETWORK"
+            printf 'TRAEFIK_SECURE_ENTRYPOINT=%s\n' "$TRAEFIK_SECURE_ENTRYPOINT"
+            printf 'TRAEFIK_CERTRESOLVER=%s\n' "$TRAEFIK_CERTRESOLVER"
+            printf 'TUENEL_WEB_DOMAIN=%s\n' "$TUENEL_WEB_DOMAIN"
+            printf 'TUENEL_API_DOMAIN=%s\n' "$TUENEL_API_DOMAIN"
+            printf 'ACME_EMAIL=%s\n' "$ACME_EMAIL"
+            printf 'TUENEL_VERSION=%s\n' "$TUENEL_VERSION"
+            printf 'POSTGRES_DB=%s\n' "$POSTGRES_DB"
+            printf 'POSTGRES_USER=%s\n' "$POSTGRES_USER"
+            printf 'POSTGRES_PASSWORD=%s\n' "$POSTGRES_PASSWORD"
+            printf 'DATABASE_URL=%s\n' "$DATABASE_URL"
+            printf 'GATEWAY_CREDENTIALS_MASTER_KEY=%s\n' "$GATEWAY_CREDENTIALS_MASTER_KEY"
+            printf 'WEB_SESSION_SECRET=%s\n' "$WEB_SESSION_SECRET"
+            printf 'OIDC_ISSUER=%s\n' "$OIDC_ISSUER"
+            printf 'OIDC_AUDIENCE=%s\n' "$OIDC_AUDIENCE"
+            printf 'OIDC_JWKS_URL=%s\n' "$OIDC_JWKS_URL"
+            printf 'OIDC_ADMIN_ROLE=%s\n' "$OIDC_ADMIN_ROLE"
+            printf 'UPSTREAM_BASE_URL=%s\n' "$UPSTREAM_BASE_URL"
+            printf 'UPSTREAM_API_KEY=%s\n' "$UPSTREAM_API_KEY"
+            printf 'UPSTREAM_MODEL=%s\n' "$UPSTREAM_MODEL"
+            printf 'GATEWAY_MODEL_ALIAS=%s\n' "$GATEWAY_MODEL_ALIAS"
+            printf 'DEFAULT_VIRTUAL_KEY_DAILY_TOKENS=%s\n' "$DEFAULT_VIRTUAL_KEY_DAILY_TOKENS"
+            printf 'RUST_LOG=%s\n' "$RUST_LOG"
+            printf 'MCP_ENABLED=%s\n' "$MCP_ENABLED"
+            printf 'TRAEFIK_LOG_LEVEL=%s\n' "$TRAEFIK_LOG_LEVEL"
+          } | base64 -w 0 | ssh -i ~/.ssh/tuenel_deploy "$VM_USER@$VM_HOST" \
+            'base64 -d > /opt/tuenel/.env.production && chmod 600 /opt/tuenel/.env.production'
+
+      - name: Deploy image tag
+        env:
+          VM_HOST: ${{ secrets.VM_HOST }}
+          VM_USER: ${{ secrets.VM_USER }}
+          TUENEL_VERSION: ${{ github.ref_name }}
+        run: |
+          ssh -i ~/.ssh/tuenel_deploy "$VM_USER@$VM_HOST" \
+            "TUENEL_VERSION='$TUENEL_VERSION' sh -s" <<'REMOTE'
+          set -eu
+          cd /opt/tuenel
+          test -f .env.production
+          traefik_existing=$(sed -n 's/^TRAEFIK_EXISTING=//p' .env.production)
+          if [ "$traefik_existing" = true ]; then
+            docker compose --profile bundled-traefik --env-file .env.production \
+              -f compose.production.yaml rm -sf traefik docker-socket-proxy || true
+            profile_args=
+          else
+            profile_args="--profile bundled-traefik"
+          fi
+          docker compose $profile_args --env-file .env.production -f compose.production.yaml config --quiet
+          docker compose $profile_args --env-file .env.production -f compose.production.yaml pull
+          docker compose $profile_args --env-file .env.production -f compose.production.yaml up -d
+          docker compose $profile_args --env-file .env.production -f compose.production.yaml ps
+          REMOTE

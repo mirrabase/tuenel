@@ -1,8 +1,9 @@
 # Production deployment with Traefik
 
 Use `compose.production.yaml` for a single-host, internet-facing deployment.
-It runs Tuenel behind Traefik with automatic Let's Encrypt certificates. The
-regular `compose.yaml` remains the local/private-network installation path.
+By default it runs Tuenel behind its bundled Traefik with automatic Let's
+Encrypt certificates. Set `TRAEFIK_EXISTING=true` to use an existing Traefik
+instead. The regular `compose.yaml` remains the local/private-network path.
 
 ## Prerequisites
 
@@ -14,6 +15,10 @@ regular `compose.yaml` remains the local/private-network installation path.
   Let's Encrypt HTTP-01 issuance and renewal.
 - Both Tuenel GHCR packages must be public or the Docker host must already be
   authenticated to GHCR.
+
+When using an existing Traefik, it must already be attached to the configured
+Docker network and have Docker provider access. The bundled Traefik and socket
+proxy are disabled in that mode.
 
 Do not publish PostgreSQL, Redis, gateway port `8080`, web port `3000`, the
 Traefik dashboard, or the Docker socket proxy.
@@ -114,6 +119,82 @@ docker compose --env-file .env.production -f compose.production.yaml up -d
 
 Rollback by restoring the previous image tag. If a release documents an
 incompatible database migration, restore the matching PostgreSQL backup too.
+
+## GitHub Actions deployment
+
+`.github/workflows/ci-cd.yml` deploys on pushes to `main`. Create a
+GitHub Actions environment named `production`. The workflow syncs the
+environment file to `/opt/tuenel/.env.production` on every release, so the VM
+does not need its application variables configured manually. Add these secrets
+to the environment:
+
+- `VM_HOST`: VM hostname or IP.
+- `VM_USER`: SSH user with permission to run Docker Compose.
+- `VM_SSH_KEY`: private Ed25519 key; install its public key in the user's
+  `~/.ssh/authorized_keys` on the VM.
+- `VM_KNOWN_HOSTS`: output of `ssh-keyscan -H <vm-host>`.
+- `POSTGRES_PASSWORD`
+- `DATABASE_URL`
+- `GATEWAY_CREDENTIALS_MASTER_KEY`
+- `WEB_SESSION_SECRET`
+- `UPSTREAM_API_KEY` (only if using an environment-managed upstream).
+
+Add these non-secret GitHub Actions variables to the same `production`
+environment:
+
+```text
+COMPOSE_PROJECT_NAME=tuenel
+TRAEFIK_EXISTING=false
+TRAEFIK_NETWORK=tuenel_edge
+TUENEL_WEB_DOMAIN=tuenel.example.com
+TUENEL_API_DOMAIN=api.tuenel.example.com
+ACME_EMAIL=admin@example.com
+POSTGRES_DB=gateway
+POSTGRES_USER=gateway
+OIDC_ISSUER=
+OIDC_AUDIENCE=
+OIDC_JWKS_URL=
+OIDC_ADMIN_ROLE=gateway_admin
+UPSTREAM_BASE_URL=
+UPSTREAM_MODEL=
+GATEWAY_MODEL_ALIAS=gateway-default
+DEFAULT_VIRTUAL_KEY_DAILY_TOKENS=100000
+RUST_LOG=info
+MCP_ENABLED=true
+TRAEFIK_LOG_LEVEL=INFO
+```
+
+The workflow pins `TUENEL_VERSION` automatically to `main`. The
+environment file is written with mode `0600` and is never printed in logs.
+
+For an existing Traefik, set:
+
+```text
+TRAEFIK_EXISTING=true
+TRAEFIK_NETWORK=<existing-docker-network>
+TRAEFIK_SECURE_ENTRYPOINT=websecure
+TRAEFIK_CERTRESOLVER=letsencrypt
+```
+
+The workflow then omits the bundled Traefik and socket proxy. The existing
+Traefik must route the labels on `gateway` and `gateway-web`, and must be
+connected to `<existing-docker-network>`.
+
+The existing Traefik must define a `websecure` entrypoint on `:443` and a
+`letsencrypt` ACME certificate resolver. Tuenel only adds router labels; it
+cannot configure an external Traefik's ACME storage or entrypoints.
+
+If the GHCR packages are private, authenticate Docker on the VM once with a
+read-only package token; do not put that token in the repository or workflow:
+
+```sh
+echo '<read-only-ghcr-token>' | docker login ghcr.io -u '<github-user>' --password-stdin
+```
+
+After pushing to `main`, CI passes first and then the deploy job copies the
+production Compose file, pins the `main` image, pulls
+the images, and recreates the services. The workflow does not transfer or
+print application secrets; they remain in `/opt/tuenel/.env.production`.
 
 ## Troubleshooting
 
