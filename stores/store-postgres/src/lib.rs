@@ -27,11 +27,17 @@ impl PostgresStore {
             .max_connections(20)
             .connect(database_url)
             .await
-            .map_err(|_| StoreError::Unavailable)?;
+            .map_err(|error| {
+                tracing::error!(error = %error, "PostgreSQL connection failed");
+                StoreError::Unavailable
+            })?;
         sqlx::migrate!("../../migrations")
             .run(&pool)
             .await
-            .map_err(|_| StoreError::Unavailable)?;
+            .map_err(|error| {
+                tracing::error!(error = %error, "PostgreSQL migration failed");
+                StoreError::Unavailable
+            })?;
         Ok(Self { pool })
     }
 
