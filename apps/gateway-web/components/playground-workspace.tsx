@@ -1434,7 +1434,7 @@ export function PlaygroundWorkspace() {
                   <div className="flex flex-col rounded-xl border bg-card shadow-sm focus-within:ring-2 focus-within:ring-ring/30">
                     <Textarea
                       ref={composerRef}
-                      className="min-h-[44px] max-h-[140px] w-full resize-none overflow-y-auto border-0 bg-transparent px-3 py-2.5 text-sm leading-relaxed shadow-none focus-visible:ring-0 focus-visible:ring-offset-0 disabled:cursor-not-allowed disabled:opacity-50"
+                      className="max-h-[140px] min-h-[44px] w-full resize-none overflow-y-auto border-0 bg-transparent px-3 py-2.5 text-sm leading-relaxed shadow-none focus-visible:ring-0 focus-visible:ring-offset-0 disabled:cursor-not-allowed disabled:opacity-50"
                       value={composer}
                       placeholder={
                         selectedModel
@@ -1450,7 +1450,7 @@ export function PlaygroundWorkspace() {
                         }
                       }}
                     />
-                    <div className="flex shrink-0 items-center justify-between px-3 pb-2 pt-1">
+                    <div className="flex shrink-0 items-center justify-between px-3 pt-1 pb-2">
                       <p className="text-[10px] text-muted-foreground">
                         Enter to send · Shift + Enter for newline · Esc to stop
                       </p>

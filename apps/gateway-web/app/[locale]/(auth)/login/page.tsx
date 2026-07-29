@@ -18,6 +18,10 @@ export default async function LoginPage({
       mode="login"
       locale={locale}
       allowSignup={capabilities?.registration_mode === "public"}
+      allowSso={
+        capabilities?.edition === "managed" ||
+        capabilities?.instance_capabilities.browser_sso.enabled === true
+      }
     />
   )
 }

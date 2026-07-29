@@ -751,7 +751,7 @@ type BillingOverview = {
 }
 
 export function OrganizationBillingPage() {
-  const { tenantId } = useGateway()
+  const { tenantId, edition } = useGateway()
   const overview = useGatewayData<BillingOverview>(
     `/admin/billing/overview?tenant_id=${tenantId}`
   )
@@ -759,12 +759,55 @@ export function OrganizationBillingPage() {
     `/admin/billing/invoices?tenant_id=${tenantId}`
   )
   const billing = overview.data
+  const [commercialPending, setCommercialPending] = React.useState(false)
+
+  async function openCommercialBilling(action: "checkout" | "portal") {
+    setCommercialPending(true)
+    try {
+      const result = await gatewayFetch<{ url: string }>(
+        `/commercial/tenants/${tenantId}/billing/${action}`,
+        tenantId,
+        {
+          method: "POST",
+          headers: { "content-type": "application/json" },
+          body:
+            action === "checkout"
+              ? JSON.stringify({ redirect_url: window.location.href })
+              : undefined,
+        }
+      )
+      window.location.assign(result.url)
+    } catch (error) {
+      toast.error(
+        error instanceof Error ? error.message : "Billing action failed"
+      )
+      setCommercialPending(false)
+    }
+  }
+
   return (
     <>
       <PageHeader
         title="Billing"
         action={
           <div className="flex gap-2">
+            {edition === "managed" && (
+              <>
+                <Button
+                  variant="outline"
+                  disabled={commercialPending}
+                  onClick={() => void openCommercialBilling("checkout")}
+                >
+                  Upgrade plan
+                </Button>
+                <Button
+                  disabled={commercialPending}
+                  onClick={() => void openCommercialBilling("portal")}
+                >
+                  Customer portal
+                </Button>
+              </>
+            )}
             {billing?.upgrade_url && (
               <Button
                 variant="outline"
@@ -1125,6 +1168,9 @@ export function OrganizationSettingsPage() {
           </form>
         )}
       </DataState>
+      {session.capabilities.browserSso && canWrite && (
+        <OidcSettings tenantId={session.tenantId} />
+      )}
       <Card className="mt-6 border-destructive/40">
         <CardHeader>
           <CardTitle>Danger zone</CardTitle>
@@ -1188,5 +1234,130 @@ export function OrganizationSettingsPage() {
         </DialogContent>
       </Dialog>
     </>
+  )
+}
+
+type OidcConfiguration = {
+  issuer_url: string
+  client_id: string
+  allowed_domains: string[]
+  enabled: boolean
+  jit_enabled: boolean
+  secret_configured: boolean
+}
+
+function OidcSettings({ tenantId }: { tenantId: string }) {
+  const configuration = useGatewayData<OidcConfiguration>(
+    `/commercial/tenants/${tenantId}/oidc`
+  )
+  const [pending, setPending] = React.useState(false)
+
+  async function save(event: React.FormEvent<HTMLFormElement>) {
+    event.preventDefault()
+    const form = new FormData(event.currentTarget)
+    setPending(true)
+    try {
+      await gatewayFetch(`/commercial/tenants/${tenantId}/oidc`, tenantId, {
+        method: "PUT",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({
+          issuer_url: form.get("issuer_url"),
+          client_id: form.get("client_id"),
+          client_secret: form.get("client_secret"),
+          allowed_domains: String(form.get("allowed_domains") ?? "")
+            .split(",")
+            .map((domain) => domain.trim())
+            .filter(Boolean),
+          enabled: form.get("enabled") === "on",
+          jit_enabled: form.get("jit_enabled") === "on",
+        }),
+      })
+      configuration.reload()
+      event.currentTarget.reset()
+      toast.success("Browser SSO configuration saved")
+    } catch (error) {
+      toast.error(
+        error instanceof Error ? error.message : "SSO configuration failed"
+      )
+    } finally {
+      setPending(false)
+    }
+  }
+
+  return (
+    <Card className="mt-6">
+      <CardHeader>
+        <CardTitle>Browser SSO</CardTitle>
+        <CardDescription>
+          Configure one OpenID Connect identity provider for this organization.
+          New JIT users always start as viewers.
+        </CardDescription>
+      </CardHeader>
+      <CardContent>
+        <form onSubmit={save} className="space-y-4">
+          <FieldGroup>
+            <Field>
+              <FieldLabel htmlFor="oidc-issuer">Issuer URL</FieldLabel>
+              <Input
+                id="oidc-issuer"
+                name="issuer_url"
+                type="url"
+                defaultValue={configuration.data?.issuer_url}
+                placeholder="https://id.example.com"
+                required
+              />
+            </Field>
+            <Field>
+              <FieldLabel htmlFor="oidc-client-id">Client ID</FieldLabel>
+              <Input
+                id="oidc-client-id"
+                name="client_id"
+                defaultValue={configuration.data?.client_id}
+                required
+              />
+            </Field>
+            <Field>
+              <FieldLabel htmlFor="oidc-secret">Client secret</FieldLabel>
+              <Input
+                id="oidc-secret"
+                name="client_secret"
+                type="password"
+                autoComplete="new-password"
+                required
+              />
+            </Field>
+            <Field>
+              <FieldLabel htmlFor="oidc-domains">Allowed domains</FieldLabel>
+              <Input
+                id="oidc-domains"
+                name="allowed_domains"
+                defaultValue={configuration.data?.allowed_domains.join(", ")}
+                placeholder="example.com, subsidiary.example.com"
+                required
+              />
+            </Field>
+            <label className="flex items-center gap-2 text-sm">
+              <input
+                name="enabled"
+                type="checkbox"
+                defaultChecked={configuration.data?.enabled}
+              />
+              Enable browser SSO
+            </label>
+            <label className="flex items-center gap-2 text-sm">
+              <input
+                name="jit_enabled"
+                type="checkbox"
+                defaultChecked={configuration.data?.jit_enabled}
+              />
+              Allow JIT viewer provisioning
+            </label>
+          </FieldGroup>
+          <Button type="submit" disabled={pending}>
+            {pending ? "Saving…" : "Save SSO configuration"}
+          </Button>
+        </form>
+      </CardContent>
+    </Card>
   )
 }
