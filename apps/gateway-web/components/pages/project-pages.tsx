@@ -253,9 +253,7 @@ export function ProjectsPage() {
                     usage.data?.tokens ?? usage.data?.total_tokens ?? 0
                   ).toLocaleString()}{" "}
                   /{" "}
-                  {Number(
-                    billing.data?.token_allowance ?? 0
-                  ).toLocaleString()}
+                  {Number(billing.data?.token_allowance ?? 0).toLocaleString()}
                 </span>
               </div>
               <div className="border-t pt-3 text-xs text-muted-foreground">

@@ -244,7 +244,12 @@ export function RoutingTopology({
 
   if (!routes.length) {
     return (
-      <div className={cn("flex h-full min-h-[380px] items-center justify-center p-6 text-center", className)}>
+      <div
+        className={cn(
+          "flex h-full min-h-[380px] items-center justify-center p-6 text-center",
+          className
+        )}
+      >
         <div className="max-w-sm">
           <p className="font-medium">No routing topology yet</p>
           <p className="mt-1 text-xs text-muted-foreground">
@@ -264,7 +269,12 @@ export function RoutingTopology({
   }
 
   return (
-    <div className={cn("h-full min-h-[380px] w-full overflow-hidden bg-muted/10", className)}>
+    <div
+      className={cn(
+        "h-full min-h-[380px] w-full overflow-hidden bg-muted/10",
+        className
+      )}
+    >
       <ReactFlow
         key={routes
           .map((route) =>

@@ -33,7 +33,7 @@ import {
   TableHeader,
   TableRow,
 } from "@/components/ui/table"
-import { type Page, gatewayFetch } from "@/lib/gateway-api"
+import { type Page, gatewayFetch, gatewayResponse } from "@/lib/gateway-api"
 
 type JsonRecord = Record<string, unknown>
 
@@ -845,12 +845,64 @@ export function LogsPage() {
 }
 
 export function AuditLogsPage() {
+  const session = useGateway()
   const auditState = useGatewayData<Page<JsonRecord>>("/admin/audit-events")
   const records = auditState.data?.data ?? []
+  const [exporting, setExporting] = React.useState(false)
+
+  async function exportAudit(format: "csv" | "jsonl") {
+    const to = new Date()
+    const from = new Date(to.getTime() - 7 * 24 * 60 * 60 * 1000)
+    setExporting(true)
+    try {
+      const query = new URLSearchParams({
+        from: from.toISOString(),
+        to: to.toISOString(),
+        format,
+      })
+      const response = await gatewayResponse(
+        `/commercial/tenants/${session.tenantId}/audit/export?${query}`,
+        session.tenantId
+      )
+      const url = URL.createObjectURL(await response.blob())
+      const anchor = document.createElement("a")
+      anchor.href = url
+      anchor.download = `audit-export.${format}`
+      anchor.click()
+      URL.revokeObjectURL(url)
+    } catch (error) {
+      toast.error(
+        error instanceof Error ? error.message : "Audit export failed"
+      )
+    } finally {
+      setExporting(false)
+    }
+  }
 
   return (
     <>
-      <PageHeader title="Audit Logs" />
+      <PageHeader
+        title="Audit Logs"
+        action={
+          session.capabilities.auditExport ? (
+            <div className="flex gap-2">
+              <Button
+                variant="outline"
+                disabled={exporting}
+                onClick={() => void exportAudit("csv")}
+              >
+                Export CSV
+              </Button>
+              <Button
+                disabled={exporting}
+                onClick={() => void exportAudit("jsonl")}
+              >
+                Export JSONL
+              </Button>
+            </div>
+          ) : undefined
+        }
+      />
       <DataState
         loading={auditState.loading}
         error={auditState.error}
