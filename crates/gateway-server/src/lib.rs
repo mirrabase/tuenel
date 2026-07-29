@@ -94,6 +94,8 @@ pub fn router(state: AppState) -> Router {
         .route("/openapi.json", get(openapi))
         .route("/metrics", get(metrics))
         .route("/auth/signup", post(signup))
+        .route("/auth/verify", post(verify))
+        .route("/auth/verification/resend", post(resend_verification))
         .route("/auth/login", post(login))
         .route("/auth/session", get(session).delete(logout))
         .route(
@@ -279,7 +281,16 @@ async fn metrics() -> Result<([(axum::http::HeaderName, &'static str); 1], Strin
 struct SignupRequest {
     email: String,
     password: String,
-    tenant_name: String,
+}
+
+#[derive(Deserialize)]
+struct VerifyRequest {
+    token: String,
+}
+
+#[derive(Deserialize)]
+struct ResendVerificationRequest {
+    email: String,
 }
 
 #[derive(Deserialize)]
@@ -322,11 +333,35 @@ async fn signup(
         .signup(Signup {
             email: input.email,
             password: input.password,
-            tenant_name: input.tenant_name,
         })
         .await
         .map_err(map_web_auth)?;
-    Ok((StatusCode::CREATED, Json(login_json(result))))
+    Ok((
+        StatusCode::CREATED,
+        Json(json!({ "email": result.email, "verification_required": true })),
+    ))
+}
+
+async fn verify(
+    State(state): State<AppState>,
+    Json(input): Json<VerifyRequest>,
+) -> Result<Json<Value>, ApiError> {
+    let result = web_auth(&state)?
+        .verify(&input.token)
+        .await
+        .map_err(map_web_auth)?;
+    Ok(Json(json!({ "email": result.email, "verified": true })))
+}
+
+async fn resend_verification(
+    State(state): State<AppState>,
+    Json(input): Json<ResendVerificationRequest>,
+) -> Result<Json<Value>, ApiError> {
+    web_auth(&state)?
+        .resend_verification(&input.email)
+        .await
+        .map_err(map_web_auth)?;
+    Ok(Json(json!({ "ok": true })))
 }
 
 async fn login(

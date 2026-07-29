@@ -13,6 +13,8 @@ use uuid::Uuid;
 
 const SESSION_PREFIX: &str = "ws_";
 const INVITATION_PREFIX: &str = "wi_";
+const VERIFICATION_PREFIX: &str = "wv_";
+const VERIFICATION_TTL: Duration = Duration::from_secs(24 * 60 * 60);
 
 #[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(rename_all = "snake_case")]
@@ -53,7 +55,21 @@ pub struct Membership {
 pub struct Signup {
     pub email: String,
     pub password: String,
-    pub tenant_name: String,
+}
+
+#[derive(Clone, Debug, Serialize)]
+pub struct SignupResult {
+    pub email: String,
+}
+
+#[derive(Clone, Debug, Serialize)]
+pub struct VerificationResult {
+    pub email: String,
+}
+
+#[async_trait]
+pub trait VerificationEmailSender: Send + Sync {
+    async fn send(&self, email: &str, token: &str) -> Result<(), WebAuthError>;
 }
 
 #[derive(Clone)]
@@ -134,14 +150,26 @@ pub trait IdentityRepository: Send + Sync {
         tenant_id: Uuid,
         tenant_name: &str,
     ) -> Result<Membership, WebAuthError>;
-    async fn create_account(
+    async fn create_pending_registration(
         &self,
-        user: &WebUser,
-        tenant_id: Uuid,
+        email: &str,
+        password_hash: &str,
         tenant_name: &str,
-        session_hash: &[u8],
+        token_hash: &[u8],
         expires_at: DateTime<Utc>,
-    ) -> Result<Vec<Membership>, WebAuthError>;
+    ) -> Result<(), WebAuthError>;
+    async fn refresh_pending_registration(
+        &self,
+        email: &str,
+        token_hash: &[u8],
+        expires_at: DateTime<Utc>,
+        now: DateTime<Utc>,
+    ) -> Result<bool, WebAuthError>;
+    async fn verify_pending_registration(
+        &self,
+        token_hash: &[u8],
+        now: DateTime<Utc>,
+    ) -> Result<VerificationResult, WebAuthError>;
     async fn user_by_email(&self, email: &str) -> Result<Option<WebUser>, WebAuthError>;
     async fn create_session(
         &self,
@@ -211,6 +239,7 @@ pub trait IdentityRepository: Send + Sync {
 pub struct WebAuthService {
     repository: Arc<dyn IdentityRepository>,
     session_ttl: Duration,
+    verification_sender: Option<Arc<dyn VerificationEmailSender>>,
 }
 
 impl WebAuthService {
@@ -218,41 +247,71 @@ impl WebAuthService {
         Self {
             repository,
             session_ttl,
+            verification_sender: None,
         }
     }
 
-    pub async fn signup(&self, input: Signup) -> Result<LoginResult, WebAuthError> {
+    pub fn with_verification_sender(mut self, sender: Arc<dyn VerificationEmailSender>) -> Self {
+        self.verification_sender = Some(sender);
+        self
+    }
+
+    pub async fn signup(&self, input: Signup) -> Result<SignupResult, WebAuthError> {
         let email = normalize_email(&input.email)?;
         validate_password(&input.password)?;
-        let tenant_name = input.tenant_name.trim();
-        if tenant_name.is_empty() || tenant_name.len() > 100 {
-            return Err(WebAuthError::Invalid);
+        if self.repository.user_by_email(&email).await?.is_some() {
+            return Err(WebAuthError::Conflict);
         }
+        let tenant_name = tenant_name_from_email(&email)?;
         let password_hash = hash_password(&input.password)?;
-        let (credential, session_hash) = new_session();
-        let expires_at = expires_at(self.session_ttl);
-        let user = WebUser {
-            id: Uuid::now_v7(),
-            email,
-            password_hash,
-            gateway_admin: false,
-        };
-        let memberships = self
-            .repository
-            .create_account(
-                &user,
-                Uuid::now_v7(),
+        let (token, token_hash) = new_token(VERIFICATION_PREFIX);
+        self.repository
+            .create_pending_registration(
+                &email,
+                &password_hash,
                 tenant_name,
-                &session_hash,
-                expires_at,
+                &token_hash,
+                Utc::now() + chrono::Duration::from_std(VERIFICATION_TTL).unwrap(),
             )
             .await?;
-        Ok(LoginResult {
-            user_id: user.id,
-            credential,
-            expires_at,
-            memberships,
-        })
+        self.verification_sender
+            .as_ref()
+            .ok_or(WebAuthError::Unavailable)?
+            .send(&email, token.expose())
+            .await?;
+        Ok(SignupResult { email })
+    }
+
+    pub async fn verify(&self, token: &str) -> Result<VerificationResult, WebAuthError> {
+        let secret = token
+            .strip_prefix(VERIFICATION_PREFIX)
+            .filter(|value| value.len() >= 32)
+            .ok_or(WebAuthError::Invalid)?;
+        self.repository
+            .verify_pending_registration(&token_hash(secret), Utc::now())
+            .await
+    }
+
+    pub async fn resend_verification(&self, email: &str) -> Result<(), WebAuthError> {
+        let email = normalize_email(email)?;
+        let (token, token_hash) = new_token(VERIFICATION_PREFIX);
+        if self
+            .repository
+            .refresh_pending_registration(
+                &email,
+                &token_hash,
+                Utc::now() + chrono::Duration::from_std(VERIFICATION_TTL).unwrap(),
+                Utc::now(),
+            )
+            .await?
+        {
+            self.verification_sender
+                .as_ref()
+                .ok_or(WebAuthError::Unavailable)?
+                .send(&email, token.expose())
+                .await?;
+        }
+        Ok(())
     }
 
     pub async fn login(&self, email: &str, password: &str) -> Result<LoginResult, WebAuthError> {
@@ -553,6 +612,14 @@ fn normalize_email(value: &str) -> Result<String, WebAuthError> {
     Ok(value)
 }
 
+fn tenant_name_from_email(email: &str) -> Result<&str, WebAuthError> {
+    let tenant_name = email.split('@').next().ok_or(WebAuthError::Invalid)?;
+    if !(1..=100).contains(&tenant_name.len()) {
+        return Err(WebAuthError::Invalid);
+    }
+    Ok(tenant_name)
+}
+
 fn validate_password(value: &str) -> Result<(), WebAuthError> {
     if (12..=128).contains(&value.len()) {
         Ok(())
@@ -630,7 +697,9 @@ pub enum WebAuthError {
 mod tests {
     use uuid::Uuid;
 
-    use super::{new_session, normalize_email, parse_credential, token_hash};
+    use super::{
+        new_session, normalize_email, parse_credential, tenant_name_from_email, token_hash,
+    };
 
     #[test]
     fn validates_boundary_values() {
@@ -640,6 +709,10 @@ mod tests {
         );
         assert!(normalize_email("not-an-email").is_err());
         assert!(parse_credential("ws_short.00000000-0000-0000-0000-000000000000", true).is_err());
+        assert_eq!(
+            tenant_name_from_email("alanersia@gmail.com").unwrap(),
+            "alanersia"
+        );
     }
 
     #[test]

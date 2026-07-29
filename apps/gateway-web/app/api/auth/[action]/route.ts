@@ -43,10 +43,13 @@ export async function POST(
       status: upstream.status,
     })
   }
-  if (action !== "login" && action !== "signup")
+  if (!["login", "signup", "verify", "verification-resend"].includes(action))
     return NextResponse.json({ error: "Not found" }, { status: 404 })
 
-  const upstream = await fetch(gatewayApiUrl(`/auth/${action}`), {
+  const upstreamPath = action === "verification-resend"
+    ? "/auth/verification/resend"
+    : `/auth/${action}`
+  const upstream = await fetch(gatewayApiUrl(upstreamPath), {
     method: "POST",
     headers: { "content-type": "application/json" },
     body: await request.text(),
@@ -57,6 +60,8 @@ export async function POST(
       { error: data?.error?.message ?? "Authentication failed" },
       { status: upstream.status }
     )
+
+  if (action !== "login") return NextResponse.json(data, { status: upstream.status })
 
   const credential = data.credential as string
   delete data.credential

@@ -41,6 +41,7 @@ security-secrets = { path = "../../security/security-secrets" }
 security-sensitive-data = { path = "../../security/security-sensitive-data" }
 security-prompt-injection = { path = "../../security/security-prompt-injection" }
 secrecy.workspace = true
+reqwest.workspace = true
 serde_json.workspace = true
 sqlx.workspace = true
 store-postgres = { path = "../../stores/store-postgres" }

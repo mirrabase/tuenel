@@ -69,6 +69,9 @@ pub struct Settings {
     pub approval_enabled: bool,
     pub approval_expiration: Duration,
     pub security_enabled: bool,
+    pub resend_api_key: Option<SecretString>,
+    pub resend_from: Option<String>,
+    pub app_url: Option<Url>,
 }
 
 impl Settings {
@@ -137,6 +140,10 @@ impl Settings {
                 "900",
             )?),
             security_enabled: parse_or("SECURITY_ENABLED", "true")?,
+            resend_api_key: optional_secret("RESEND_API_KEY")
+                .or_else(|| optional_secret("RESEND_API_KEYS")),
+            resend_from: optional("RESEND_FROM"),
+            app_url: parse_optional("NEXT_PUBLIC_APP_URL")?,
         };
 
         if settings.default_output_tokens == 0
@@ -159,6 +166,14 @@ impl Settings {
             &[
                 settings.upstream_base_url.is_some(),
                 settings.upstream_model.is_some(),
+            ],
+        )?;
+        complete_group(
+            "RESEND_API_KEY, RESEND_FROM, and NEXT_PUBLIC_APP_URL",
+            &[
+                settings.resend_api_key.is_some(),
+                settings.resend_from.is_some(),
+                settings.app_url.is_some(),
             ],
         )?;
         if settings

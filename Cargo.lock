@@ -1197,6 +1197,7 @@ dependencies = [
  "provider-anthropic",
  "provider-gemini",
  "provider-openai-compatible",
+ "reqwest",
  "secrecy",
  "security-prompt-injection",
  "security-secrets",

@@ -2,7 +2,10 @@ use std::{sync::Arc, time::Duration};
 
 use chrono::Utc;
 use gateway_approval::{ApprovalRepository, ApprovalService};
-use gateway_auth::{AuthService, IdentityRepository, JwtAuthenticator, WebAuthService};
+use gateway_auth::{
+    AuthService, IdentityRepository, JwtAuthenticator, VerificationEmailSender, WebAuthError,
+    WebAuthService,
+};
 use gateway_billing::{BillingRepository, BillingWorker};
 use gateway_config::Settings;
 use gateway_core::{GatewayRuntime, GatewayService};
@@ -38,6 +41,42 @@ use store_postgres::PostgresStore;
 use tokio::signal;
 use uuid::Uuid;
 
+#[derive(Clone)]
+struct ResendEmailSender {
+    client: reqwest::Client,
+    api_key: SecretString,
+    from: String,
+    app_url: url::Url,
+}
+
+#[async_trait::async_trait]
+impl VerificationEmailSender for ResendEmailSender {
+    async fn send(&self, email: &str, token: &str) -> Result<(), WebAuthError> {
+        let mut verification_url = self.app_url.clone();
+        verification_url.set_path("/en/verify");
+        verification_url
+            .query_pairs_mut()
+            .append_pair("token", token);
+        let response = self
+            .client
+            .post("https://api.resend.com/emails")
+            .bearer_auth(self.api_key.expose_secret())
+            .json(&serde_json::json!({
+                "from": self.from,
+                "to": [email],
+                "subject": "Verify your Tuenel account",
+                "html": format!("<p>Verify your Tuenel account:</p><p><a href=\"{verification_url}\">Verify email</a></p>"),
+            }))
+            .send()
+            .await
+            .map_err(|_| WebAuthError::Unavailable)?;
+        response
+            .error_for_status()
+            .map(|_| ())
+            .map_err(|_| WebAuthError::Unavailable)
+    }
+}
+
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     if std::env::args().nth(1).as_deref() == Some("openapi") {
@@ -72,10 +111,27 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
             None
         }
     };
+    let verification_sender = match (
+        settings.resend_api_key.clone(),
+        settings.resend_from.clone(),
+        settings.app_url.clone(),
+    ) {
+        (Some(api_key), Some(from), Some(app_url)) => Some(Arc::new(ResendEmailSender {
+            client: reqwest::Client::new(),
+            api_key,
+            from,
+            app_url,
+        })
+            as Arc<dyn VerificationEmailSender>),
+        _ => None,
+    };
     let web_auth = WebAuthService::new(
         postgres.clone() as Arc<dyn IdentityRepository>,
         Duration::from_secs(12 * 60 * 60),
     );
+    let web_auth = verification_sender.map_or(web_auth.clone(), |sender| {
+        web_auth.clone().with_verification_sender(sender)
+    });
     let authenticator = Arc::new(AuthService::new(jwt, keys.clone()).with_web(web_auth.clone()));
     let pricing = Pricing {
         input_per_million: settings.input_cost_per_million,
