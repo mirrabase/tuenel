@@ -65,6 +65,39 @@ export type Session = {
   memberships: Membership[]
 }
 
+export type AuthCapabilities = {
+  deployment_mode: "standalone" | "managed"
+  registration_mode: "public" | "invite_only" | "closed"
+  bootstrap_required: boolean
+  email_verification_required: boolean
+  edition: "community" | "enterprise" | "managed"
+  instance_capabilities: CapabilityDecisions
+}
+
+export type CapabilityDecision = {
+  enabled: boolean
+  valid_until: string | null
+  reason_code: string
+}
+
+export type CapabilityDecisions = {
+  browser_sso: CapabilityDecision
+  audit_export: CapabilityDecision
+}
+
+export type TenantCapabilities = {
+  edition: "community" | "enterprise" | "managed"
+  tenant_id: string
+  capabilities: CapabilityDecisions
+}
+
+export async function getAuthCapabilities(): Promise<AuthCapabilities | null> {
+  const response = await fetch(`${gatewayUrl()}/auth/capabilities`, {
+    cache: "no-store",
+  })
+  return response.ok ? response.json() : null
+}
+
 export async function getSession(): Promise<Session | null> {
   const credential = await sessionCredential()
   if (!credential) return null
@@ -72,6 +105,21 @@ export async function getSession(): Promise<Session | null> {
     headers: { authorization: `Bearer ${credential}` },
     cache: "no-store",
   })
+  return response.ok ? response.json() : null
+}
+
+export async function getTenantCapabilities(
+  tenantId: string
+): Promise<TenantCapabilities | null> {
+  const credential = await sessionCredential()
+  if (!credential) return null
+  const response = await fetch(
+    `${gatewayUrl()}/auth/tenants/${encodeURIComponent(tenantId)}/capabilities`,
+    {
+      headers: { authorization: `Bearer ${credential}.${tenantId}` },
+      cache: "no-store",
+    }
+  )
   return response.ok ? response.json() : null
 }
 

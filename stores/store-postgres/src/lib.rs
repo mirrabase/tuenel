@@ -1,6 +1,7 @@
 //! PostgreSQL implementation of the gateway persistence boundary.
 
 pub mod admin;
+mod entitlements;
 mod identity;
 mod security_store;
 mod v03;

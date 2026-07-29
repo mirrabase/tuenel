@@ -7,7 +7,7 @@
       "name": "Apache-2.0",
       "identifier": "Apache-2.0"
     },
-    "version": "0.3.0"
+    "version": "0.4.0"
   },
   "paths": {
     "/admin/approvals": {
@@ -584,6 +584,21 @@
         }
       }
     },
+    "/admin/provider-health": {
+      "get": {
+        "responses": {
+          "200": {
+            "description": "Success"
+          },
+          "401": {
+            "description": "Authentication required"
+          },
+          "403": {
+            "description": "Not authorized"
+          }
+        }
+      }
+    },
     "/admin/providers": {
       "get": {
         "responses": {
@@ -971,21 +986,6 @@
         }
       }
     },
-    "/admin/provider-health": {
-      "get": {
-        "responses": {
-          "200": {
-            "description": "Success"
-          },
-          "401": {
-            "description": "Authentication required"
-          },
-          "403": {
-            "description": "Not authorized"
-          }
-        }
-      }
-    },
     "/admin/usage/breakdowns": {
       "get": {
         "responses": {
@@ -1146,6 +1146,21 @@
         }
       }
     },
+    "/auth/capabilities": {
+      "get": {
+        "responses": {
+          "200": {
+            "description": "Success"
+          },
+          "401": {
+            "description": "Authentication required"
+          },
+          "403": {
+            "description": "Not authorized"
+          }
+        }
+      }
+    },
     "/auth/tenants/{tenant_id}": {
       "get": {
         "responses": {
@@ -1174,6 +1189,21 @@
         }
       },
       "patch": {
+        "responses": {
+          "200": {
+            "description": "Success"
+          },
+          "401": {
+            "description": "Authentication required"
+          },
+          "403": {
+            "description": "Not authorized"
+          }
+        }
+      }
+    },
+    "/auth/tenants/{tenant_id}/capabilities": {
+      "get": {
         "responses": {
           "200": {
             "description": "Success"
@@ -2337,7 +2367,7 @@
   "tags": [
     {
       "name": "gateway",
-      "description": "Tuenel Gateway v0.3"
+      "description": "Tuenel Gateway v0.4"
     }
   ]
 }

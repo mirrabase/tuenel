@@ -84,18 +84,22 @@ export function MembersPage() {
     setPending(true)
     try {
       const email = String(new FormData(event.currentTarget).get("email"))
-      const result = await gatewayFetch<{ token: string }>(
-        `/auth/tenants/${session.tenantId}/invitations`,
-        session.tenantId,
-        {
-          method: "POST",
-          headers: { "content-type": "application/json" },
-          body: JSON.stringify({ email, role }),
-        }
-      )
-      setLink(
-        `${window.location.origin}/${locale}/invite?token=${encodeURIComponent(result.token)}`
-      )
+      const result = await gatewayFetch<{
+        token?: string
+        delivery: "manual" | "email"
+      }>(`/auth/tenants/${session.tenantId}/invitations`, session.tenantId, {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ email, role }),
+      })
+      if (result.token)
+        setLink(
+          `${window.location.origin}/${locale}/invite#token=${encodeURIComponent(result.token)}`
+        )
+      else {
+        setLink(undefined)
+        toast.success("Invitation email queued")
+      }
       invitations.reload()
     } catch (error) {
       toast.error(error instanceof Error ? error.message : "Invitation failed")

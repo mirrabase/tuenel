@@ -15,6 +15,7 @@ gateway-admin = { path = "../gateway-admin" }
 gateway-approval = { path = "../gateway-approval" }
 gateway-core = { path = "../gateway-core" }
 gateway-events = { path = "../gateway-events" }
+gateway-entitlements = { path = "../gateway-entitlements" }
 gateway-incidents = { path = "../gateway-incidents" }
 gateway-keys = { path = "../gateway-keys" }
 gateway-mcp = { path = "../gateway-mcp" }

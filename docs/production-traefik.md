@@ -1,9 +1,10 @@
 # Production deployment with Traefik
 
 Use `compose.production.yaml` for a single-host, internet-facing deployment.
-By default it runs Tuenel behind its bundled Traefik with automatic Let's
-Encrypt certificates. Set `TRAEFIK_EXISTING=true` to use an existing Traefik
-instead. The regular `compose.yaml` remains the local/private-network path.
+The installer activates its bundled Traefik profile for automatic Let's
+Encrypt certificates. Set `TRAEFIK_EXISTING=true` and omit that profile to use
+an existing Traefik instead. The regular `compose.yaml` remains the direct
+HTTP path.
 
 ## Prerequisites
 
@@ -25,6 +26,14 @@ Traefik dashboard, or the Docker socket proxy.
 
 ## Configure
 
+The recommended path is the first-run wizard:
+
+```sh
+./install.sh
+```
+
+Choose bundled or existing Traefik. To configure the environment manually:
+
 ```sh
 cp .env.production.example .env.production
 chmod 600 .env.production
@@ -38,44 +47,64 @@ Use the first value as `POSTGRES_PASSWORD`, the second as
 `DATABASE_URL` to
 `postgres://gateway:<URL-encoded-password>@postgres:5432/gateway`.
 
-Replace both example domains, the ACME email, and `TUENEL_VERSION`. Pin a
-published release such as `v1.0.0`; do not deploy `latest`.
+Replace both example domains and `TUENEL_VERSION`. Bundled Traefik also
+requires the ACME email. Pin a published release such as `v0.4.0`; do not
+deploy the moving `edge` tag.
 
 OIDC and the environment-managed upstream are optional. When enabled, set
 every value in the relevant group. Provider credentials may instead be added
 from the console after startup.
 
+The wizard separately asks for the identity topology. Use `standalone` for a
+self-hosted or dedicated installation. For a shared managed control plane use
+`managed`, then choose `public`, `invite_only`, or `closed`. Public signup and
+email invitations require a verified Resend sender. The first account is
+always created through the protected one-time setup link and is the only local
+account automatically granted instance-administrator privileges.
+
 ## Validate and start
 
 ```sh
-docker compose --env-file .env.production -f compose.production.yaml config --quiet
-docker compose --env-file .env.production -f compose.production.yaml pull
-docker compose --env-file .env.production -f compose.production.yaml up -d
-docker compose --env-file .env.production -f compose.production.yaml ps
+docker compose --env-file .env.production -f compose.production.yaml --profile bundled-traefik config --quiet
+docker compose --env-file .env.production -f compose.production.yaml --profile bundled-traefik pull
+docker compose --env-file .env.production -f compose.production.yaml --profile bundled-traefik up -d
+docker compose --env-file .env.production -f compose.production.yaml --profile bundled-traefik ps
 ```
 
 Traefik redirects HTTP to HTTPS and obtains separate certificates for the web
 and API hostnames. Certificate state is stored in the `traefik-acme` named
 volume and renewals are automatic.
 
+For an existing Traefik, omit `--profile bundled-traefik` from every command.
+
 Verify DNS, redirects, certificates, and health:
 
 ```sh
 curl --fail --head "http://tuenel.example.com"
 curl --fail "https://api.tuenel.example.com/ready"
+curl --fail "https://tuenel.example.com/ready"
 curl --fail "https://tuenel.example.com/en/login"
 ```
 
-Open the web hostname and create the first account. Registration is public at
-the web hostname; for an internal-only deployment, restrict the hostname with
-your firewall, VPN, or identity-aware edge proxy.
+`https://api.tuenel.example.com/v1` is the canonical OpenAI-compatible base
+URL shown by the console. The same approved public paths are also routed on
+the web hostname for compatibility, so existing clients using
+`https://tuenel.example.com/v1` continue to work. Set `GATEWAY_PUBLIC_URL` only
+when the canonical browser-facing base URL differs from the API hostname.
+
+Open the one-time setup link printed by the installer. Normal registration is
+exposed only when `AUTH_REGISTRATION_MODE=public`; customer accounts become
+owners of their own organization but never instance administrators. For an
+internal-only deployment, also restrict the hostname with your firewall, VPN,
+or identity-aware edge proxy.
 
 ## Exposure and security model
 
 Only Traefik binds host ports. PostgreSQL and Redis are attached only to an
-internal Docker network. The API hostname exposes inference/MCP, health, and
-OpenAPI paths; administration and browser authentication remain reachable
-only through the web service's internal gateway proxy.
+internal Docker network. The API hostname and the compatibility routes on the
+web hostname expose inference/MCP, health, and OpenAPI paths; administration
+and browser authentication remain reachable only through the web service's
+internal gateway proxy.
 
 Traefik container discovery uses a dedicated Docker socket proxy. It grants
 only read access to the container, event, info, network, ping, and version API
@@ -83,11 +112,12 @@ sections; write requests are denied. The socket proxy is isolated on its own
 internal network.
 
 The Traefik dashboard and API are disabled. Access logs are disabled by
-default so credentials or invitation data in URLs cannot be retained by the
-edge. Application logs remain available with:
+default. Bootstrap, verification, and invitation secrets are carried in URL
+fragments, which are never sent to the edge, and are removed from browser
+history immediately. Application logs remain available with:
 
 ```sh
-docker compose --env-file .env.production -f compose.production.yaml logs -f gateway gateway-web traefik
+docker compose --env-file .env.production -f compose.production.yaml --profile bundled-traefik logs -f gateway gateway-web traefik
 ```
 
 Security headers include one-year HSTS without `includeSubDomains`, frame
@@ -113,30 +143,35 @@ private keys.
 For upgrades, take a database backup, change the pinned `TUENEL_VERSION`, then:
 
 ```sh
-docker compose --env-file .env.production -f compose.production.yaml pull
-docker compose --env-file .env.production -f compose.production.yaml up -d
+docker compose --env-file .env.production -f compose.production.yaml --profile bundled-traefik pull
+docker compose --env-file .env.production -f compose.production.yaml --profile bundled-traefik up -d
 ```
 
 Rollback by restoring the previous image tag. If a release documents an
 incompatible database migration, restore the matching PostgreSQL backup too.
 
-## GitHub Actions deployment
+## Deployment automation
 
-`.github/workflows/ci-cd.yml` deploys on pushes to `main`. Create a
-GitHub Actions environment named `production`. The workflow syncs the
-environment file to `/opt/tuenel/.env.production` on every release, so the VM
-does not need its application variables configured manually. Add these secrets
-to the environment:
+The public repository does not deploy production infrastructure and holds no
+VM or application secrets. `.github/workflows/ci.yml` runs secret-free checks
+for pull requests and pushes. `.github/workflows/release.yml` publishes signed,
+attested images: immutable version tags come from Git tags and `edge` tracks
+`main`.
+
+Keep production deployment credentials in the deployment environment, not the
+public repository. A deployment system needs:
 
 - `VM_HOST`: VM hostname or IP.
 - `VM_USER`: SSH user with permission to run Docker Compose.
 - `VM_SSH_KEY`: private Ed25519 key; install its public key in the user's
   `~/.ssh/authorized_keys` on the VM.
-- `VM_KNOWN_HOSTS`: output of `ssh-keyscan -H <vm-host>`.
+- `VM_KNOWN_HOSTS`: pinned host key data.
 - `POSTGRES_PASSWORD`
 - `DATABASE_URL`
 - `GATEWAY_CREDENTIALS_MASTER_KEY`
 - `WEB_SESSION_SECRET`
+- `AUTH_BOOTSTRAP_TOKEN_HASH` (required only until a fresh database is claimed)
+- `RESEND_API_KEY` (required for public signup or email invitations)
 - `UPSTREAM_API_KEY` (only if using an environment-managed upstream).
 
 Add these non-secret GitHub Actions variables to the same `production`
@@ -151,6 +186,10 @@ TUENEL_API_DOMAIN=api.tuenel.example.com
 ACME_EMAIL=admin@example.com
 POSTGRES_DB=gateway
 POSTGRES_USER=gateway
+TUENEL_DEPLOYMENT_MODE=standalone
+AUTH_REGISTRATION_MODE=invite_only
+AUTH_INVITATION_DELIVERY=manual
+RESEND_FROM=
 OIDC_ISSUER=
 OIDC_AUDIENCE=
 OIDC_JWKS_URL=

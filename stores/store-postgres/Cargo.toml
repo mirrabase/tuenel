@@ -14,6 +14,7 @@ gateway-auth = { path = "../../crates/gateway-auth" }
 gateway-billing = { path = "../../crates/gateway-billing" }
 gateway-incidents = { path = "../../crates/gateway-incidents" }
 gateway-events = { path = "../../crates/gateway-events" }
+gateway-entitlements = { path = "../../crates/gateway-entitlements" }
 gateway-mcp = { path = "../../crates/gateway-mcp" }
 gateway-policy = { path = "../../crates/gateway-policy" }
 gateway-pricing = { path = "../../crates/gateway-pricing" }

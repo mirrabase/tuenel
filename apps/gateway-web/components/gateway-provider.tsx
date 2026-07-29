@@ -10,6 +10,12 @@ export type GatewaySession = {
   tenantName: string
   tenantRole: "owner" | "admin" | "engineer" | "viewer"
   gatewayAdmin: boolean
+  gatewayEndpoint: string
+  edition: "community" | "enterprise" | "managed"
+  capabilities: {
+    browserSso: boolean
+    auditExport: boolean
+  }
   memberships: {
     tenant_id: string
     tenant_name: string

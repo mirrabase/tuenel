@@ -7,6 +7,7 @@ rust-version.workspace = true
 
 [dependencies]
 async-trait.workspace = true
+gateway-auth = { path = "../../crates/gateway-auth" }
 gateway-mcp = { path = "../../crates/gateway-mcp" }
 gateway-quota = { path = "../../crates/gateway-quota" }
 gateway-types = { path = "../../crates/gateway-types" }

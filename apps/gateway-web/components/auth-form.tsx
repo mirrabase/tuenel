@@ -26,9 +26,11 @@ const copy = {
     signup: "Create your Tuenel account",
     loginDescription: "Sign in to manage your gateway tenants.",
     signupDescription: "Create an account and your first tenant.",
-    verificationSent: "Check your email for a verification link before signing in.",
+    verificationSent:
+      "Check your email for a verification link before signing in.",
     email: "Email",
     password: "Password",
+    tenant: "Organization name",
     submitLogin: "Sign in",
     submitSignup: "Create account",
     switchLogin: "Already have an account? Sign in",
@@ -42,6 +44,7 @@ const copy = {
     verificationSent: "Cek email Anda untuk link verifikasi sebelum masuk.",
     email: "Email",
     password: "Kata sandi",
+    tenant: "Nama organisasi",
     submitLogin: "Masuk",
     submitSignup: "Buat akun",
     switchLogin: "Sudah punya akun? Masuk",
@@ -52,9 +55,11 @@ const copy = {
 export function AuthForm({
   mode,
   locale,
+  allowSignup = false,
 }: {
   mode: "login" | "signup"
   locale: Locale
+  allowSignup?: boolean
 }) {
   const text = copy[locale]
   const router = useRouter()
@@ -90,7 +95,7 @@ export function AuthForm({
       setPending(false)
       return
     }
-    router.replace(mode === "signup" ? `/${locale}/${tenant}/projects/new` : `/${locale}`)
+    router.replace(`/${locale}`)
     router.refresh()
   }
 
@@ -121,6 +126,19 @@ export function AuthForm({
                 required
               />
             </Field>
+            {mode === "signup" && (
+              <Field>
+                <FieldLabel htmlFor="tenant_name">{text.tenant}</FieldLabel>
+                <Input
+                  id="tenant_name"
+                  name="tenant_name"
+                  minLength={1}
+                  maxLength={100}
+                  autoComplete="organization"
+                  required
+                />
+              </Field>
+            )}
             <Field>
               <FieldLabel htmlFor="password">{text.password}</FieldLabel>
               <Input
@@ -147,18 +165,20 @@ export function AuthForm({
           </FieldGroup>
         </form>
       </CardContent>
-      <CardFooter>
-        <Button
-          variant="link"
-          render={
-            <Link
-              href={`/${locale}/${mode === "login" ? "register" : "login"}`}
-            />
-          }
-        >
-          {mode === "login" ? text.switchSignup : text.switchLogin}
-        </Button>
-      </CardFooter>
+      {(mode === "signup" || allowSignup) && (
+        <CardFooter>
+          <Button
+            variant="link"
+            render={
+              <Link
+                href={`/${locale}/${mode === "login" ? "register" : "login"}`}
+              />
+            }
+          >
+            {mode === "login" ? text.switchSignup : text.switchLogin}
+          </Button>
+        </CardFooter>
+      )}
     </Card>
   )
 }

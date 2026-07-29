@@ -51,7 +51,7 @@ services:
       - --entrypoints.${TRAEFIK_SECURE_ENTRYPOINT:-websecure}.transport.respondingtimeouts.readtimeout=180s
       - --entrypoints.${TRAEFIK_SECURE_ENTRYPOINT:-websecure}.transport.respondingtimeouts.writetimeout=0s
       - --entrypoints.${TRAEFIK_SECURE_ENTRYPOINT:-websecure}.transport.respondingtimeouts.idletimeout=180s
-      - --certificatesresolvers.${TRAEFIK_CERTRESOLVER:-letsencrypt}.acme.email=${ACME_EMAIL:?Set ACME_EMAIL in .env.production}
+      - --certificatesresolvers.${TRAEFIK_CERTRESOLVER:-letsencrypt}.acme.email=${ACME_EMAIL:-}
       - --certificatesresolvers.${TRAEFIK_CERTRESOLVER:-letsencrypt}.acme.storage=/letsencrypt/acme.json
       - --certificatesresolvers.${TRAEFIK_CERTRESOLVER:-letsencrypt}.acme.keytype=EC256
       - --certificatesresolvers.${TRAEFIK_CERTRESOLVER:-letsencrypt}.acme.httpchallenge.entrypoint=web
@@ -121,6 +121,13 @@ services:
       DATABASE_URL: ${DATABASE_URL:?Set DATABASE_URL in .env.production}
       REDIS_URL: redis://redis:6379
       GATEWAY_CREDENTIALS_MASTER_KEY: ${GATEWAY_CREDENTIALS_MASTER_KEY:?Set GATEWAY_CREDENTIALS_MASTER_KEY in .env.production}
+      TUENEL_DEPLOYMENT_MODE: ${TUENEL_DEPLOYMENT_MODE:-standalone}
+      AUTH_REGISTRATION_MODE: ${AUTH_REGISTRATION_MODE:-invite_only}
+      AUTH_INVITATION_DELIVERY: ${AUTH_INVITATION_DELIVERY:-manual}
+      AUTH_BOOTSTRAP_TOKEN_HASH: ${AUTH_BOOTSTRAP_TOKEN_HASH:-}
+      RESEND_API_KEY: ${RESEND_API_KEY:-}
+      RESEND_FROM: ${RESEND_FROM:-}
+      NEXT_PUBLIC_APP_URL: ${NEXT_PUBLIC_APP_URL:-https://${TUENEL_WEB_DOMAIN:?Set TUENEL_WEB_DOMAIN in .env.production}}
       OIDC_ISSUER: ${OIDC_ISSUER:-}
       OIDC_AUDIENCE: ${OIDC_AUDIENCE:-}
       OIDC_JWKS_URL: ${OIDC_JWKS_URL:-}
@@ -147,8 +154,9 @@ services:
     labels:
       - traefik.enable=true
       - traefik.docker.network=${TRAEFIK_NETWORK:-${COMPOSE_PROJECT_NAME:-tuenel}_edge}
-      - traefik.http.routers.tuenel-api.rule=Host(`${TUENEL_API_DOMAIN:?Set TUENEL_API_DOMAIN in .env.production}`) && (PathPrefix(`/v1`) || Path(`/mcp`) || Path(`/health`) || Path(`/ready`) || Path(`/openapi.json`))
+      - traefik.http.routers.tuenel-api.rule=(Host(`${TUENEL_API_DOMAIN:?Set TUENEL_API_DOMAIN in .env.production}`) || Host(`${TUENEL_WEB_DOMAIN:?Set TUENEL_WEB_DOMAIN in .env.production}`)) && (PathPrefix(`/v1`) || Path(`/mcp`) || Path(`/health`) || Path(`/ready`) || Path(`/openapi.json`))
       - traefik.http.routers.tuenel-api.entrypoints=${TRAEFIK_SECURE_ENTRYPOINT:-websecure}
+      - traefik.http.routers.tuenel-api.priority=100
       - traefik.http.routers.tuenel-api.tls=true
       - traefik.http.routers.tuenel-api.tls.certresolver=${TRAEFIK_CERTRESOLVER:-letsencrypt}
       - traefik.http.routers.tuenel-api.middlewares=tuenel-secure-headers@docker
@@ -176,6 +184,7 @@ services:
     init: true
     environment:
       GATEWAY_API_URL: http://gateway:8080
+      GATEWAY_PUBLIC_URL: ${GATEWAY_PUBLIC_URL:-https://${TUENEL_API_DOMAIN:?Set TUENEL_API_DOMAIN in .env.production}/v1}
       WEB_SESSION_SECRET: ${WEB_SESSION_SECRET:?Set WEB_SESSION_SECRET in .env.production}
       PORT: 3000
       HOSTNAME: 0.0.0.0

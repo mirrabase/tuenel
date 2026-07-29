@@ -535,7 +535,7 @@ function ConnectModal({
 }) {
   const [copiedTab, setCopiedTab] = React.useState<string | null>(null)
 
-  const baseUrl = `${endpoint.replace(/\/+$/, "")}/v1`
+  const baseUrl = endpoint.replace(/\/+$/, "")
 
   const snippets: Record<
     string,

@@ -5,6 +5,7 @@ use async_trait::async_trait;
 use base64::{Engine, engine::general_purpose::URL_SAFE_NO_PAD};
 use chrono::{DateTime, Utc};
 use gateway_types::{AuthenticationMethod, Principal};
+use hmac::{Hmac, Mac};
 use rand::{RngCore, rngs::OsRng};
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
@@ -14,7 +15,31 @@ use uuid::Uuid;
 const SESSION_PREFIX: &str = "ws_";
 const INVITATION_PREFIX: &str = "wi_";
 const VERIFICATION_PREFIX: &str = "wv_";
+const BOOTSTRAP_PREFIX: &str = "tb_";
 const VERIFICATION_TTL: Duration = Duration::from_secs(24 * 60 * 60);
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum RegistrationMode {
+    Public,
+    InviteOnly,
+    Closed,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum InvitationDelivery {
+    Manual,
+    Email,
+}
+
+#[derive(Clone, Debug, Serialize)]
+pub struct AuthCapabilities {
+    pub deployment_mode: String,
+    pub registration_mode: RegistrationMode,
+    pub bootstrap_required: bool,
+    pub email_verification_required: bool,
+}
 
 #[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(rename_all = "snake_case")]
@@ -55,6 +80,7 @@ pub struct Membership {
 pub struct Signup {
     pub email: String,
     pub password: String,
+    pub tenant_name: String,
 }
 
 #[derive(Clone, Debug, Serialize)]
@@ -67,9 +93,64 @@ pub struct VerificationResult {
     pub email: String,
 }
 
+#[derive(Clone, Debug)]
+pub struct Bootstrap {
+    pub token: String,
+    pub email: String,
+    pub password: String,
+    pub tenant_name: String,
+}
+
 #[async_trait]
 pub trait VerificationEmailSender: Send + Sync {
-    async fn send(&self, email: &str, token: &str) -> Result<(), WebAuthError>;
+    async fn send_verification(
+        &self,
+        event_id: Uuid,
+        email: &str,
+        token: &str,
+    ) -> Result<(), WebAuthError>;
+    async fn send_invitation(
+        &self,
+        event_id: Uuid,
+        email: &str,
+        token: &str,
+    ) -> Result<(), WebAuthError>;
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum AuthEmailKind {
+    Verification,
+    Invitation,
+}
+
+impl AuthEmailKind {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Verification => "verification",
+            Self::Invitation => "invitation",
+        }
+    }
+}
+
+#[async_trait]
+pub trait AuthEmailQueue: Send + Sync {
+    async fn enqueue(
+        &self,
+        kind: AuthEmailKind,
+        email: &str,
+        token: &str,
+    ) -> Result<(), WebAuthError>;
+}
+
+#[async_trait]
+pub trait AuthAttemptLimiter: Send + Sync {
+    async fn check(
+        &self,
+        action: &str,
+        subject: &str,
+        maximum: u64,
+        window: Duration,
+    ) -> Result<(), WebAuthError>;
 }
 
 #[derive(Clone)]
@@ -78,6 +159,14 @@ pub struct LoginResult {
     pub credential: SessionCredential,
     pub expires_at: DateTime<Utc>,
     pub memberships: Vec<Membership>,
+}
+
+/// Rust-only session minting boundary for identity adapters that have already
+/// validated an external browser login. This trait is intentionally not wired
+/// to an unauthenticated HTTP endpoint.
+#[async_trait]
+pub trait TrustedSessionIssuer: Send + Sync {
+    async fn issue_trusted_session(&self, user_id: Uuid) -> Result<LoginResult, WebAuthError>;
 }
 
 #[derive(Clone, Debug, Serialize)]
@@ -92,8 +181,9 @@ pub struct SessionInfo {
 #[derive(Clone, Debug)]
 pub struct InvitationResult {
     pub id: Uuid,
-    pub token: SessionCredential,
+    pub token: Option<SessionCredential>,
     pub expires_at: DateTime<Utc>,
+    pub delivery: InvitationDelivery,
 }
 
 #[derive(Clone, Debug, Serialize)]
@@ -144,6 +234,16 @@ impl fmt::Debug for SessionCredential {
 
 #[async_trait]
 pub trait IdentityRepository: Send + Sync {
+    async fn installation_initialized(&self) -> Result<bool, WebAuthError>;
+    #[allow(clippy::too_many_arguments)]
+    async fn bootstrap_account(
+        &self,
+        user: &WebUser,
+        tenant_id: Uuid,
+        tenant_name: &str,
+        session_hash: &[u8],
+        expires_at: DateTime<Utc>,
+    ) -> Result<Vec<Membership>, WebAuthError>;
     async fn create_tenant(
         &self,
         user_id: Uuid,
@@ -208,6 +308,14 @@ pub trait IdentityRepository: Send + Sync {
         email: &str,
         now: DateTime<Utc>,
     ) -> Result<Membership, WebAuthError>;
+    async fn register_invitation(
+        &self,
+        token_hash: &[u8],
+        user: &WebUser,
+        session_hash: &[u8],
+        session_expires_at: DateTime<Utc>,
+        now: DateTime<Utc>,
+    ) -> Result<Membership, WebAuthError>;
     async fn organization(&self, tenant_id: Uuid) -> Result<Option<Organization>, WebAuthError>;
     async fn update_organization(
         &self,
@@ -239,7 +347,13 @@ pub trait IdentityRepository: Send + Sync {
 pub struct WebAuthService {
     repository: Arc<dyn IdentityRepository>,
     session_ttl: Duration,
-    verification_sender: Option<Arc<dyn VerificationEmailSender>>,
+    email_queue: Option<Arc<dyn AuthEmailQueue>>,
+    registration_mode: RegistrationMode,
+    deployment_mode: String,
+    bootstrap_hash: Option<Vec<u8>>,
+    invitation_delivery: InvitationDelivery,
+    limiter: Option<Arc<dyn AuthAttemptLimiter>>,
+    limiter_key: Option<Vec<u8>>,
 }
 
 impl WebAuthService {
@@ -247,22 +361,118 @@ impl WebAuthService {
         Self {
             repository,
             session_ttl,
-            verification_sender: None,
+            email_queue: None,
+            registration_mode: RegistrationMode::InviteOnly,
+            deployment_mode: "standalone".into(),
+            bootstrap_hash: None,
+            invitation_delivery: InvitationDelivery::Manual,
+            limiter: None,
+            limiter_key: None,
         }
     }
 
-    pub fn with_verification_sender(mut self, sender: Arc<dyn VerificationEmailSender>) -> Self {
-        self.verification_sender = Some(sender);
+    pub fn with_email_queue(mut self, queue: Arc<dyn AuthEmailQueue>) -> Self {
+        self.email_queue = Some(queue);
         self
     }
 
+    pub fn with_attempt_limiter(
+        mut self,
+        limiter: Arc<dyn AuthAttemptLimiter>,
+        key: Vec<u8>,
+    ) -> Self {
+        self.limiter = Some(limiter);
+        self.limiter_key = Some(key);
+        self
+    }
+
+    async fn limit(&self, action: &str, subject: &str, maximum: u64) -> Result<(), WebAuthError> {
+        let (Some(limiter), Some(key)) = (&self.limiter, &self.limiter_key) else {
+            return Ok(());
+        };
+        let mut mac = Hmac::<Sha256>::new_from_slice(key).map_err(|_| WebAuthError::Unavailable)?;
+        mac.update(subject.trim().to_ascii_lowercase().as_bytes());
+        let digest = URL_SAFE_NO_PAD.encode(mac.finalize().into_bytes());
+        limiter
+            .check(action, &digest, maximum, Duration::from_secs(15 * 60))
+            .await
+    }
+
+    pub fn with_registration(
+        mut self,
+        deployment_mode: impl Into<String>,
+        registration_mode: RegistrationMode,
+        bootstrap_hash: Option<Vec<u8>>,
+        invitation_delivery: InvitationDelivery,
+    ) -> Self {
+        self.deployment_mode = deployment_mode.into();
+        self.registration_mode = registration_mode;
+        self.bootstrap_hash = bootstrap_hash;
+        self.invitation_delivery = invitation_delivery;
+        self
+    }
+
+    pub async fn capabilities(&self) -> Result<AuthCapabilities, WebAuthError> {
+        Ok(AuthCapabilities {
+            deployment_mode: self.deployment_mode.clone(),
+            registration_mode: self.registration_mode,
+            bootstrap_required: !self.repository.installation_initialized().await?,
+            email_verification_required: self.registration_mode == RegistrationMode::Public,
+        })
+    }
+
+    pub async fn bootstrap(&self, input: Bootstrap) -> Result<LoginResult, WebAuthError> {
+        self.limit("bootstrap", &input.token, 10).await?;
+        if self.repository.installation_initialized().await? {
+            return Err(WebAuthError::BootstrapConsumed);
+        }
+        let expected = self
+            .bootstrap_hash
+            .as_deref()
+            .ok_or(WebAuthError::Unavailable)?;
+        if !valid_bootstrap_token(expected, &input.token) {
+            return Err(WebAuthError::InvalidBootstrapToken);
+        }
+        let email = normalize_email(&input.email)?;
+        validate_password(&input.password)?;
+        let tenant_name = validate_tenant_name(&input.tenant_name)?;
+        let user = WebUser {
+            id: Uuid::now_v7(),
+            email,
+            password_hash: hash_password(&input.password)?,
+            gateway_admin: true,
+        };
+        let (credential, session_hash) = new_session();
+        let expires_at = expires_at(self.session_ttl);
+        let memberships = self
+            .repository
+            .bootstrap_account(
+                &user,
+                Uuid::now_v7(),
+                tenant_name,
+                &session_hash,
+                expires_at,
+            )
+            .await?;
+        Ok(LoginResult {
+            user_id: user.id,
+            credential,
+            expires_at,
+            memberships,
+        })
+    }
+
     pub async fn signup(&self, input: Signup) -> Result<SignupResult, WebAuthError> {
+        if self.registration_mode != RegistrationMode::Public {
+            return Err(WebAuthError::RegistrationClosed);
+        }
+        self.limit("signup", &input.email, 5).await?;
         let email = normalize_email(&input.email)?;
         validate_password(&input.password)?;
         if self.repository.user_by_email(&email).await?.is_some() {
-            return Err(WebAuthError::Conflict);
+            return Ok(SignupResult { email });
         }
-        let tenant_name = tenant_name_from_email(&email)?;
+        let tenant_name = validate_tenant_name(&input.tenant_name)?;
         let password_hash = hash_password(&input.password)?;
         let (token, token_hash) = new_token(VERIFICATION_PREFIX);
         self.repository
@@ -274,10 +484,10 @@ impl WebAuthService {
                 Utc::now() + chrono::Duration::from_std(VERIFICATION_TTL).unwrap(),
             )
             .await?;
-        self.verification_sender
+        self.email_queue
             .as_ref()
             .ok_or(WebAuthError::Unavailable)?
-            .send(&email, token.expose())
+            .enqueue(AuthEmailKind::Verification, &email, token.expose())
             .await?;
         Ok(SignupResult { email })
     }
@@ -293,6 +503,7 @@ impl WebAuthService {
     }
 
     pub async fn resend_verification(&self, email: &str) -> Result<(), WebAuthError> {
+        self.limit("verification_resend", email, 5).await?;
         let email = normalize_email(email)?;
         let (token, token_hash) = new_token(VERIFICATION_PREFIX);
         if self
@@ -305,16 +516,17 @@ impl WebAuthService {
             )
             .await?
         {
-            self.verification_sender
+            self.email_queue
                 .as_ref()
                 .ok_or(WebAuthError::Unavailable)?
-                .send(&email, token.expose())
+                .enqueue(AuthEmailKind::Verification, &email, token.expose())
                 .await?;
         }
         Ok(())
     }
 
     pub async fn login(&self, email: &str, password: &str) -> Result<LoginResult, WebAuthError> {
+        self.limit("login", email, 10).await?;
         let email = normalize_email(email)?;
         let user = self
             .repository
@@ -426,8 +638,9 @@ impl WebAuthService {
         let (token, token_hash) = new_token(INVITATION_PREFIX);
         let result = InvitationResult {
             id: Uuid::now_v7(),
-            token,
+            token: (self.invitation_delivery == InvitationDelivery::Manual).then(|| token.clone()),
             expires_at: Utc::now() + chrono::Duration::days(7),
+            delivery: self.invitation_delivery,
         };
         self.repository
             .create_invitation(
@@ -440,6 +653,13 @@ impl WebAuthService {
                 result.expires_at,
             )
             .await?;
+        if self.invitation_delivery == InvitationDelivery::Email {
+            self.email_queue
+                .as_ref()
+                .ok_or(WebAuthError::Unavailable)?
+                .enqueue(AuthEmailKind::Invitation, &email, token.expose())
+                .await?;
+        }
         Ok(result)
     }
 
@@ -461,6 +681,46 @@ impl WebAuthService {
                 Utc::now(),
             )
             .await
+    }
+
+    pub async fn register_invitation(
+        &self,
+        token: &str,
+        password: &str,
+    ) -> Result<LoginResult, WebAuthError> {
+        self.limit("invitation_register", token, 10).await?;
+        if self.registration_mode == RegistrationMode::Closed {
+            return Err(WebAuthError::RegistrationClosed);
+        }
+        validate_password(password)?;
+        let secret = token
+            .strip_prefix(INVITATION_PREFIX)
+            .filter(|value| value.len() >= 32)
+            .ok_or(WebAuthError::Invalid)?;
+        let (credential, session_hash) = new_session();
+        let expires_at = expires_at(self.session_ttl);
+        let user = WebUser {
+            id: Uuid::now_v7(),
+            email: String::new(),
+            password_hash: hash_password(password)?,
+            gateway_admin: false,
+        };
+        let membership = self
+            .repository
+            .register_invitation(
+                &token_hash(secret),
+                &user,
+                &session_hash,
+                expires_at,
+                Utc::now(),
+            )
+            .await?;
+        Ok(LoginResult {
+            user_id: user.id,
+            credential,
+            expires_at,
+            memberships: vec![membership],
+        })
     }
 
     pub async fn organization(&self, credential: &str) -> Result<Organization, WebAuthError> {
@@ -565,6 +825,23 @@ impl WebAuthService {
     }
 }
 
+#[async_trait]
+impl TrustedSessionIssuer for WebAuthService {
+    async fn issue_trusted_session(&self, user_id: Uuid) -> Result<LoginResult, WebAuthError> {
+        let (credential, session_hash) = new_session();
+        let expires_at = expires_at(self.session_ttl);
+        self.repository
+            .create_session(user_id, &session_hash, expires_at)
+            .await?;
+        Ok(LoginResult {
+            user_id,
+            credential,
+            expires_at,
+            memberships: self.repository.memberships(user_id).await?,
+        })
+    }
+}
+
 fn require_manager(roles: &[String]) -> Result<(), WebAuthError> {
     roles
         .iter()
@@ -612,12 +889,24 @@ fn normalize_email(value: &str) -> Result<String, WebAuthError> {
     Ok(value)
 }
 
-fn tenant_name_from_email(email: &str) -> Result<&str, WebAuthError> {
-    let tenant_name = email.split('@').next().ok_or(WebAuthError::Invalid)?;
+fn validate_tenant_name(value: &str) -> Result<&str, WebAuthError> {
+    let tenant_name = value.trim();
     if !(1..=100).contains(&tenant_name.len()) {
         return Err(WebAuthError::Invalid);
     }
     Ok(tenant_name)
+}
+
+fn valid_bootstrap_token(expected: &[u8], token: &str) -> bool {
+    if token
+        .strip_prefix(BOOTSTRAP_PREFIX)
+        .is_none_or(|value| value.len() < 32)
+    {
+        return false;
+    }
+    let presented = Sha256::digest(token.as_bytes());
+    expected.len() == presented.len()
+        && aws_lc_rs::constant_time::verify_slices_are_equal(expected, &presented).is_ok()
 }
 
 fn validate_password(value: &str) -> Result<(), WebAuthError> {
@@ -691,14 +980,24 @@ pub enum WebAuthError {
     Hashing,
     #[error("identity service unavailable")]
     Unavailable,
+    #[error("authentication rate limit exceeded")]
+    RateLimited,
+    #[error("registration is closed")]
+    RegistrationClosed,
+    #[error("bootstrap has already been consumed")]
+    BootstrapConsumed,
+    #[error("invalid bootstrap token")]
+    InvalidBootstrapToken,
 }
 
 #[cfg(test)]
 mod tests {
+    use sha2::Digest;
     use uuid::Uuid;
 
     use super::{
-        new_session, normalize_email, parse_credential, tenant_name_from_email, token_hash,
+        new_session, normalize_email, parse_credential, token_hash, valid_bootstrap_token,
+        validate_tenant_name,
     };
 
     #[test]
@@ -709,10 +1008,7 @@ mod tests {
         );
         assert!(normalize_email("not-an-email").is_err());
         assert!(parse_credential("ws_short.00000000-0000-0000-0000-000000000000", true).is_err());
-        assert_eq!(
-            tenant_name_from_email("alanersia@gmail.com").unwrap(),
-            "alanersia"
-        );
+        assert_eq!(validate_tenant_name(" Acme ").unwrap(), "Acme");
     }
 
     #[test]
@@ -725,5 +1021,17 @@ mod tests {
         let (secret, parsed_tenant) = parse_credential(&presented, true).unwrap();
         assert_eq!(parsed_tenant, Some(tenant_id));
         assert_eq!(token_hash(secret), hash);
+    }
+
+    #[test]
+    fn bootstrap_token_requires_prefix_length_and_matching_digest() {
+        let token = "tb_0123456789abcdef0123456789abcdef";
+        let expected = sha2::Sha256::digest(token.as_bytes());
+        assert!(valid_bootstrap_token(&expected, token));
+        assert!(!valid_bootstrap_token(&expected, "tb_short"));
+        assert!(!valid_bootstrap_token(
+            &expected,
+            "tb_ffffffffffffffffffffffffffffffff"
+        ));
     }
 }

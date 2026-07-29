@@ -1,0 +1,7 @@
+* @alanersia
+
+/.github/ @alanersia
+/migrations/ @alanersia
+/crates/gateway-auth/ @alanersia
+/crates/gateway-entitlements/ @alanersia
+/crates/gateway-secrets/ @alanersia
