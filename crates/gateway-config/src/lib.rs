@@ -69,6 +69,13 @@ pub struct Settings {
     pub approval_enabled: bool,
     pub approval_expiration: Duration,
     pub security_enabled: bool,
+    pub resend_api_key: Option<SecretString>,
+    pub resend_from: Option<String>,
+    pub app_url: Option<Url>,
+    pub deployment_mode: String,
+    pub registration_mode: String,
+    pub invitation_delivery: String,
+    pub bootstrap_token_hash: Option<Vec<u8>>,
 }
 
 impl Settings {
@@ -137,6 +144,19 @@ impl Settings {
                 "900",
             )?),
             security_enabled: parse_or("SECURITY_ENABLED", "true")?,
+            resend_api_key: optional_secret("RESEND_API_KEY")
+                .or_else(|| optional_secret("RESEND_API_KEYS")),
+            resend_from: optional("RESEND_FROM"),
+            app_url: parse_optional("NEXT_PUBLIC_APP_URL")?,
+            deployment_mode: optional("TUENEL_DEPLOYMENT_MODE")
+                .unwrap_or_else(|| "standalone".into()),
+            registration_mode: optional("AUTH_REGISTRATION_MODE")
+                .unwrap_or_else(|| "invite_only".into()),
+            invitation_delivery: optional("AUTH_INVITATION_DELIVERY")
+                .unwrap_or_else(|| "manual".into()),
+            bootstrap_token_hash: optional("AUTH_BOOTSTRAP_TOKEN_HASH")
+                .map(|value| decode_hex_32("AUTH_BOOTSTRAP_TOKEN_HASH", &value))
+                .transpose()?,
         };
 
         if settings.default_output_tokens == 0
@@ -161,6 +181,38 @@ impl Settings {
                 settings.upstream_model.is_some(),
             ],
         )?;
+        if settings.resend_api_key.is_some()
+            && (settings.resend_from.is_none() || settings.app_url.is_none())
+        {
+            return Err(ConfigError::Invalid(
+                "RESEND_FROM and NEXT_PUBLIC_APP_URL are required with RESEND_API_KEY".into(),
+            ));
+        }
+        if !matches!(settings.deployment_mode.as_str(), "standalone" | "managed") {
+            return Err(ConfigError::Invalid(
+                "TUENEL_DEPLOYMENT_MODE must be standalone or managed".into(),
+            ));
+        }
+        if !matches!(
+            settings.registration_mode.as_str(),
+            "public" | "invite_only" | "closed"
+        ) {
+            return Err(ConfigError::Invalid(
+                "AUTH_REGISTRATION_MODE must be public, invite_only, or closed".into(),
+            ));
+        }
+        if !matches!(settings.invitation_delivery.as_str(), "manual" | "email") {
+            return Err(ConfigError::Invalid(
+                "AUTH_INVITATION_DELIVERY must be manual or email".into(),
+            ));
+        }
+        if (settings.registration_mode == "public" || settings.invitation_delivery == "email")
+            && settings.resend_api_key.is_none()
+        {
+            return Err(ConfigError::Invalid(
+                "RESEND_API_KEY is required for public registration or email invitations".into(),
+            ));
+        }
         if settings
             .upstream_base_url
             .as_ref()
@@ -291,6 +343,21 @@ fn complete_group(name: &str, configured: &[bool]) -> Result<(), ConfigError> {
     Ok(())
 }
 
+fn decode_hex_32(name: &'static str, value: &str) -> Result<Vec<u8>, ConfigError> {
+    if value.len() != 64 || !value.bytes().all(|byte| byte.is_ascii_hexdigit()) {
+        return Err(ConfigError::Invalid(format!(
+            "{name} must be a 64-character SHA-256 hex digest"
+        )));
+    }
+    (0..64)
+        .step_by(2)
+        .map(|offset| {
+            u8::from_str_radix(&value[offset..offset + 2], 16)
+                .map_err(|_| ConfigError::Invalid(format!("{name} must be valid hexadecimal")))
+        })
+        .collect()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -307,5 +374,25 @@ mod tests {
         assert!(complete_group("OIDC", &[false, false, false]).is_ok());
         assert!(complete_group("OIDC", &[true, true, true]).is_ok());
         assert!(complete_group("OIDC", &[true, false, true]).is_err());
+    }
+
+    #[test]
+    fn bootstrap_hash_requires_exact_sha256_hex_shape() {
+        assert_eq!(
+            decode_hex_32(
+                "AUTH_BOOTSTRAP_TOKEN_HASH",
+                "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+            )
+            .unwrap(),
+            vec![0xaa; 32]
+        );
+        assert!(decode_hex_32("AUTH_BOOTSTRAP_TOKEN_HASH", "aa").is_err());
+        assert!(
+            decode_hex_32(
+                "AUTH_BOOTSTRAP_TOKEN_HASH",
+                "zzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzz"
+            )
+            .is_err()
+        );
     }
 }

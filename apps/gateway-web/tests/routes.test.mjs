@@ -371,6 +371,36 @@ test("shared buttons and client-only values are hydration safe", () => {
   assert.doesNotMatch(projectPages, /typeof window/)
 })
 
+test("public gateway URLs come from runtime deployment configuration", () => {
+  const provider = readFileSync(
+    join(root, "components/gateway-provider.tsx"),
+    "utf8"
+  )
+  const layout = readFileSync(
+    join(root, "app/[locale]/[tenantId]/layout.tsx"),
+    "utf8"
+  )
+  const shared = readFileSync(join(root, "components/pages/shared.tsx"), "utf8")
+  const projectConsole = readFileSync(
+    join(root, "components/pages/project-console-pages.tsx"),
+    "utf8"
+  )
+  const apiReference = readFileSync(
+    join(root, "components/api-reference.tsx"),
+    "utf8"
+  )
+
+  assert.match(provider, /gatewayEndpoint: string/)
+  assert.match(layout, /process\.env\.GATEWAY_PUBLIC_URL/)
+  assert.match(shared, /return useGateway\(\)\.gatewayEndpoint/)
+  assert.ok(shared.includes('replace(/\\/v1$/, "")'))
+  assert.doesNotMatch(shared, /window\.location\.origin/)
+  assert.match(projectConsole, /const baseUrl = endpoint\.replace/)
+  assert.doesNotMatch(projectConsole, /endpoint\.replace[^\n]+\/v1/)
+  assert.ok(apiReference.includes("`${gatewayOrigin}${activeEndpoint.path}`"))
+  assert.doesNotMatch(apiReference, /\{gatewayEndpoint\}\/v1/)
+})
+
 test("browser credentials are never persisted in script-readable storage", () => {
   const files = [
     "components/console-shell.tsx",

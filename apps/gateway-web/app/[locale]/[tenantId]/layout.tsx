@@ -3,7 +3,7 @@ import { notFound, redirect } from "next/navigation"
 import { ConsoleShell } from "@/components/console-shell"
 import { GatewayProvider } from "@/components/gateway-provider"
 import { isLocale } from "@/lib/locales"
-import { getSession } from "@/lib/server-auth"
+import { getSession, getTenantCapabilities } from "@/lib/server-auth"
 
 export default async function TenantLayout({
   children,
@@ -21,6 +21,7 @@ export default async function TenantLayout({
     (item) => item.tenant_id === tenantId
   )
   if (!membership) notFound()
+  const entitlement = await getTenantCapabilities(tenantId)
   return (
     <GatewayProvider
       session={{
@@ -30,6 +31,14 @@ export default async function TenantLayout({
         tenantName: membership.tenant_name,
         tenantRole: membership.role,
         gatewayAdmin: session.gateway_admin,
+        gatewayEndpoint: (
+          process.env.GATEWAY_PUBLIC_URL?.trim() || "http://localhost:8080/v1"
+        ).replace(/\/+$/, ""),
+        edition: entitlement?.edition ?? "community",
+        capabilities: {
+          browserSso: entitlement?.capabilities.browser_sso.enabled ?? false,
+          auditExport: entitlement?.capabilities.audit_export.enabled ?? false,
+        },
         memberships: session.memberships,
       }}
     >

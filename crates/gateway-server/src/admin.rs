@@ -225,7 +225,7 @@ async fn system(
     value["runtime"] =
         serde_json::to_value(state.gateway.status()).map_err(|_| ApiError::internal())?;
     value["otel_enabled"] = Value::Bool(std::env::var_os("OTEL_EXPORTER_OTLP_ENDPOINT").is_some());
-    value["deployment_mode"] = Value::String("standalone".into());
+    value["deployment_mode"] = Value::String(state.deployment_mode.clone());
     Ok(Json(value))
 }
 

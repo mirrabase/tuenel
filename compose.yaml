@@ -23,12 +23,19 @@ services:
       retries: 30
 
   gateway:
-    image: ghcr.io/mirrabase/tuenel-gateway:${TUENEL_VERSION:-latest}
+    image: ghcr.io/mirrabase/tuenel-gateway:${TUENEL_VERSION:-edge}
     build: .
     environment:
       DATABASE_URL: ${DATABASE_URL:?Set DATABASE_URL in .env}
       REDIS_URL: redis://redis:6379
       GATEWAY_CREDENTIALS_MASTER_KEY: ${GATEWAY_CREDENTIALS_MASTER_KEY:?Set GATEWAY_CREDENTIALS_MASTER_KEY in .env}
+      TUENEL_DEPLOYMENT_MODE: ${TUENEL_DEPLOYMENT_MODE:-standalone}
+      AUTH_REGISTRATION_MODE: ${AUTH_REGISTRATION_MODE:-invite_only}
+      AUTH_INVITATION_DELIVERY: ${AUTH_INVITATION_DELIVERY:-manual}
+      AUTH_BOOTSTRAP_TOKEN_HASH: ${AUTH_BOOTSTRAP_TOKEN_HASH:-}
+      RESEND_API_KEY: ${RESEND_API_KEY:-}
+      RESEND_FROM: ${RESEND_FROM:-}
+      NEXT_PUBLIC_APP_URL: ${NEXT_PUBLIC_APP_URL:-http://localhost:${GATEWAY_WEB_PORT:-3000}}
       OIDC_ISSUER: ${OIDC_ISSUER:-}
       OIDC_AUDIENCE: ${OIDC_AUDIENCE:-}
       OIDC_JWKS_URL: ${OIDC_JWKS_URL:-}
@@ -56,12 +63,13 @@ services:
       retries: 30
 
   gateway-web:
-    image: ghcr.io/mirrabase/tuenel-gateway-web:${TUENEL_VERSION:-latest}
+    image: ghcr.io/mirrabase/tuenel-gateway-web:${TUENEL_VERSION:-edge}
     build:
       context: ./apps/gateway-web
       dockerfile: Dockerfile
     environment:
       GATEWAY_API_URL: http://gateway:8080
+      GATEWAY_PUBLIC_URL: ${GATEWAY_PUBLIC_URL:-http://localhost:${GATEWAY_PORT:-8080}/v1}
       WEB_SESSION_SECRET: ${WEB_SESSION_SECRET:?Set WEB_SESSION_SECRET in .env}
       PORT: 3000
       HOSTNAME: 0.0.0.0

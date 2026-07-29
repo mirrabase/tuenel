@@ -1,6 +1,7 @@
 //! Redis-backed bounded counters and concurrency reservations.
 
 use async_trait::async_trait;
+use gateway_auth::{AuthAttemptLimiter, WebAuthError};
 use gateway_mcp::{McpError, McpPolicy, McpQuota, McpQuotaReservation};
 use gateway_quota::{InferenceQuotaCounter, QuotaError};
 use gateway_types::{McpServerId, Principal};
@@ -29,6 +30,37 @@ impl RedisQuotaStore {
             .await
             .map_err(|_| RedisQuotaError::Unavailable)
             .map(|_| ())
+    }
+}
+
+#[async_trait]
+impl AuthAttemptLimiter for RedisQuotaStore {
+    async fn check(
+        &self,
+        action: &str,
+        subject: &str,
+        maximum: u64,
+        window: std::time::Duration,
+    ) -> Result<(), WebAuthError> {
+        let key = format!("auth:{action}:{subject}");
+        let script = redis::Script::new(
+            "local count=redis.call('INCR',KEYS[1]);if count==1 then redis.call('EXPIRE',KEYS[1],ARGV[2]) end;if count>tonumber(ARGV[1]) then return 0 end return 1",
+        );
+        let mut connection = self
+            .client
+            .get_multiplexed_async_connection()
+            .await
+            .map_err(|_| WebAuthError::Unavailable)?;
+        let accepted: i32 = script
+            .key(key)
+            .arg(maximum)
+            .arg(window.as_secs())
+            .invoke_async(&mut connection)
+            .await
+            .map_err(|_| WebAuthError::Unavailable)?;
+        (accepted == 1)
+            .then_some(())
+            .ok_or(WebAuthError::RateLimited)
     }
 }
 

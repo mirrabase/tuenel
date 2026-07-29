@@ -1,7 +1,8 @@
-import { notFound } from "next/navigation"
+import { notFound, redirect } from "next/navigation"
 
 import { AuthForm } from "@/components/auth-form"
 import { isLocale } from "@/lib/locales"
+import { getAuthCapabilities } from "@/lib/server-auth"
 
 export default async function LoginPage({
   params,
@@ -10,5 +11,13 @@ export default async function LoginPage({
 }) {
   const { locale } = await params
   if (!isLocale(locale)) notFound()
-  return <AuthForm mode="login" locale={locale} />
+  const capabilities = await getAuthCapabilities()
+  if (capabilities?.bootstrap_required) redirect(`/${locale}/setup`)
+  return (
+    <AuthForm
+      mode="login"
+      locale={locale}
+      allowSignup={capabilities?.registration_mode === "public"}
+    />
+  )
 }

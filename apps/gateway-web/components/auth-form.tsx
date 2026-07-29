@@ -26,9 +26,11 @@ const copy = {
     signup: "Create your Tuenel account",
     loginDescription: "Sign in to manage your gateway tenants.",
     signupDescription: "Create an account and your first tenant.",
+    verificationSent:
+      "Check your email for a verification link before signing in.",
     email: "Email",
     password: "Password",
-    tenant: "Tenant name",
+    tenant: "Organization name",
     submitLogin: "Sign in",
     submitSignup: "Create account",
     switchLogin: "Already have an account? Sign in",
@@ -39,9 +41,10 @@ const copy = {
     signup: "Buat akun Tuenel",
     loginDescription: "Masuk untuk mengelola tenant gateway Anda.",
     signupDescription: "Buat akun dan tenant pertama Anda.",
+    verificationSent: "Cek email Anda untuk link verifikasi sebelum masuk.",
     email: "Email",
     password: "Kata sandi",
-    tenant: "Nama tenant",
+    tenant: "Nama organisasi",
     submitLogin: "Masuk",
     submitSignup: "Buat akun",
     switchLogin: "Sudah punya akun? Masuk",
@@ -52,14 +55,17 @@ const copy = {
 export function AuthForm({
   mode,
   locale,
+  allowSignup = false,
 }: {
   mode: "login" | "signup"
   locale: Locale
+  allowSignup?: boolean
 }) {
   const text = copy[locale]
   const router = useRouter()
   const [pending, setPending] = React.useState(false)
   const [error, setError] = React.useState<string>()
+  const [verificationSent, setVerificationSent] = React.useState(false)
 
   async function submit(event: React.FormEvent<HTMLFormElement>) {
     event.preventDefault()
@@ -78,13 +84,18 @@ export function AuthForm({
       setPending(false)
       return
     }
+    if (mode === "signup") {
+      setVerificationSent(true)
+      setPending(false)
+      return
+    }
     const tenant = result.memberships?.[0]?.tenant_id
     if (!tenant) {
       setError("No tenant membership is available")
       setPending(false)
       return
     }
-    router.replace(mode === "signup" ? `/${locale}/${tenant}/projects/new` : `/${locale}`)
+    router.replace(`/${locale}`)
     router.refresh()
   }
 
@@ -115,6 +126,19 @@ export function AuthForm({
                 required
               />
             </Field>
+            {mode === "signup" && (
+              <Field>
+                <FieldLabel htmlFor="tenant_name">{text.tenant}</FieldLabel>
+                <Input
+                  id="tenant_name"
+                  name="tenant_name"
+                  minLength={1}
+                  maxLength={100}
+                  autoComplete="organization"
+                  required
+                />
+              </Field>
+            )}
             <Field>
               <FieldLabel htmlFor="password">{text.password}</FieldLabel>
               <Input
@@ -129,36 +153,32 @@ export function AuthForm({
                 required
               />
             </Field>
-            {mode === "signup" && (
-              <Field>
-                <FieldLabel htmlFor="tenant_name">{text.tenant}</FieldLabel>
-                <Input
-                  id="tenant_name"
-                  name="tenant_name"
-                  maxLength={100}
-                  required
-                />
-              </Field>
+            {verificationSent && (
+              <Alert>
+                <AlertDescription>{text.verificationSent}</AlertDescription>
+              </Alert>
             )}
-            <Button type="submit" disabled={pending}>
+            <Button type="submit" disabled={pending || verificationSent}>
               {pending && <Spinner data-icon="inline-start" />}
               {mode === "login" ? text.submitLogin : text.submitSignup}
             </Button>
           </FieldGroup>
         </form>
       </CardContent>
-      <CardFooter>
-        <Button
-          variant="link"
-          render={
-            <Link
-              href={`/${locale}/${mode === "login" ? "register" : "login"}`}
-            />
-          }
-        >
-          {mode === "login" ? text.switchSignup : text.switchLogin}
-        </Button>
-      </CardFooter>
+      {(mode === "signup" || allowSignup) && (
+        <CardFooter>
+          <Button
+            variant="link"
+            render={
+              <Link
+                href={`/${locale}/${mode === "login" ? "register" : "login"}`}
+              />
+            }
+          >
+            {mode === "login" ? text.switchSignup : text.switchLogin}
+          </Button>
+        </CardFooter>
+      )}
     </Card>
   )
 }

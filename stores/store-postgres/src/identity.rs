@@ -2,7 +2,7 @@ use async_trait::async_trait;
 use chrono::{DateTime, Utc};
 use gateway_auth::{
     IdentityRepository, Membership, Organization, OrganizationUpdate, PendingInvitation,
-    TenantRole, WebAuthError, WebUser,
+    TenantRole, VerificationResult, WebAuthError, WebUser,
 };
 use sqlx::Row;
 use uuid::Uuid;
@@ -11,6 +11,77 @@ use crate::PostgresStore;
 
 #[async_trait]
 impl IdentityRepository for PostgresStore {
+    async fn installation_initialized(&self) -> Result<bool, WebAuthError> {
+        sqlx::query_scalar::<_, bool>(
+            "SELECT initialized_at IS NOT NULL FROM installation_state WHERE singleton=true",
+        )
+        .fetch_one(&self.pool)
+        .await
+        .map_err(map_error)
+    }
+
+    async fn bootstrap_account(
+        &self,
+        user: &WebUser,
+        tenant_id: Uuid,
+        tenant_name: &str,
+        session_hash: &[u8],
+        expires_at: DateTime<Utc>,
+    ) -> Result<Vec<Membership>, WebAuthError> {
+        let mut transaction = self.pool.begin().await.map_err(map_error)?;
+        let initialized: bool = sqlx::query_scalar(
+            "SELECT initialized_at IS NOT NULL FROM installation_state
+             WHERE singleton=true FOR UPDATE",
+        )
+        .fetch_one(&mut *transaction)
+        .await
+        .map_err(map_error)?;
+        if initialized {
+            return Err(WebAuthError::BootstrapConsumed);
+        }
+        sqlx::query(
+            "INSERT INTO users (id,email,password_hash,gateway_admin) VALUES ($1,$2,$3,true)",
+        )
+        .bind(user.id)
+        .bind(&user.email)
+        .bind(&user.password_hash)
+        .execute(&mut *transaction)
+        .await
+        .map_err(map_error)?;
+        sqlx::query(
+            "INSERT INTO tenants (id,name,slug,daily_token_limit) VALUES ($1,$2,$3,100000)",
+        )
+        .bind(tenant_id.to_string())
+        .bind(tenant_name)
+        .bind(slug(tenant_name, tenant_id))
+        .execute(&mut *transaction)
+        .await
+        .map_err(map_error)?;
+        sqlx::query(
+            "INSERT INTO tenant_memberships (tenant_id,user_id,role) VALUES ($1,$2,'owner')",
+        )
+        .bind(tenant_id.to_string())
+        .bind(user.id)
+        .execute(&mut *transaction)
+        .await
+        .map_err(map_error)?;
+        insert_session(&mut transaction, user.id, session_hash, expires_at).await?;
+        sqlx::query(
+            "UPDATE installation_state SET initialized_at=now(),initialized_by=$1
+             WHERE singleton=true",
+        )
+        .bind(user.id)
+        .execute(&mut *transaction)
+        .await
+        .map_err(map_error)?;
+        transaction.commit().await.map_err(map_error)?;
+        Ok(vec![Membership {
+            tenant_id,
+            tenant_name: tenant_name.to_owned(),
+            role: TenantRole::Owner,
+        }])
+    }
+
     async fn create_tenant(
         &self,
         user_id: Uuid,
@@ -42,51 +113,6 @@ impl IdentityRepository for PostgresStore {
             role: TenantRole::Owner,
         })
     }
-    async fn create_account(
-        &self,
-        user: &WebUser,
-        tenant_id: Uuid,
-        tenant_name: &str,
-        session_hash: &[u8],
-        expires_at: DateTime<Utc>,
-    ) -> Result<Vec<Membership>, WebAuthError> {
-        let mut transaction = self.pool.begin().await.map_err(map_error)?;
-        sqlx::query(
-            "INSERT INTO users (id,email,password_hash,gateway_admin) VALUES ($1,$2,$3,$4)",
-        )
-        .bind(user.id)
-        .bind(&user.email)
-        .bind(&user.password_hash)
-        .bind(user.gateway_admin)
-        .execute(&mut *transaction)
-        .await
-        .map_err(map_error)?;
-        sqlx::query(
-            "INSERT INTO tenants (id,name,slug,daily_token_limit) VALUES ($1,$2,$3,100000)",
-        )
-        .bind(tenant_id.to_string())
-        .bind(tenant_name)
-        .bind(slug(tenant_name, tenant_id))
-        .execute(&mut *transaction)
-        .await
-        .map_err(map_error)?;
-        sqlx::query(
-            "INSERT INTO tenant_memberships (tenant_id,user_id,role) VALUES ($1,$2,'owner')",
-        )
-        .bind(tenant_id.to_string())
-        .bind(user.id)
-        .execute(&mut *transaction)
-        .await
-        .map_err(map_error)?;
-        insert_session(&mut transaction, user.id, session_hash, expires_at).await?;
-        transaction.commit().await.map_err(map_error)?;
-        Ok(vec![Membership {
-            tenant_id,
-            tenant_name: tenant_name.to_owned(),
-            role: TenantRole::Owner,
-        }])
-    }
-
     async fn user_by_email(&self, email: &str) -> Result<Option<WebUser>, WebAuthError> {
         sqlx::query("SELECT id,email,password_hash,gateway_admin FROM users WHERE email=$1")
             .bind(email)
@@ -95,6 +121,94 @@ impl IdentityRepository for PostgresStore {
             .map_err(map_error)?
             .map(user_from_row)
             .transpose()
+    }
+
+    async fn create_pending_registration(
+        &self,
+        email: &str,
+        password_hash: &str,
+        tenant_name: &str,
+        token_hash: &[u8],
+        expires_at: DateTime<Utc>,
+    ) -> Result<(), WebAuthError> {
+        sqlx::query(
+            "INSERT INTO pending_registrations (email,password_hash,tenant_name,token_hash,expires_at) VALUES ($1,$2,$3,$4,$5) ON CONFLICT (email) DO UPDATE SET password_hash=EXCLUDED.password_hash,tenant_name=EXCLUDED.tenant_name,token_hash=EXCLUDED.token_hash,expires_at=EXCLUDED.expires_at,created_at=now()",
+        )
+        .bind(email)
+        .bind(password_hash)
+        .bind(tenant_name)
+        .bind(token_hash)
+        .bind(expires_at)
+        .execute(&self.pool)
+        .await
+        .map(|_| ())
+        .map_err(map_error)
+    }
+
+    async fn refresh_pending_registration(
+        &self,
+        email: &str,
+        token_hash: &[u8],
+        expires_at: DateTime<Utc>,
+        _now: DateTime<Utc>,
+    ) -> Result<bool, WebAuthError> {
+        sqlx::query("UPDATE pending_registrations SET token_hash=$2,expires_at=$3,created_at=now() WHERE email=$1")
+            .bind(email).bind(token_hash).bind(expires_at).execute(&self.pool).await
+            .map(|result| result.rows_affected() == 1).map_err(map_error)
+    }
+
+    async fn verify_pending_registration(
+        &self,
+        token_hash: &[u8],
+        now: DateTime<Utc>,
+    ) -> Result<VerificationResult, WebAuthError> {
+        let mut transaction = self.pool.begin().await.map_err(map_error)?;
+        let row = sqlx::query("SELECT email,password_hash,tenant_name FROM pending_registrations WHERE token_hash=$1 AND expires_at>$2 FOR UPDATE")
+            .bind(token_hash).bind(now).fetch_optional(&mut *transaction).await.map_err(map_error)?.ok_or(WebAuthError::Invalid)?;
+        let email: String = row
+            .try_get("email")
+            .map_err(|_| WebAuthError::Unavailable)?;
+        let password_hash: String = row
+            .try_get("password_hash")
+            .map_err(|_| WebAuthError::Unavailable)?;
+        let tenant_name: String = row
+            .try_get("tenant_name")
+            .map_err(|_| WebAuthError::Unavailable)?;
+        let user_id = Uuid::now_v7();
+        let tenant_id = Uuid::now_v7();
+        sqlx::query(
+            "INSERT INTO users (id,email,password_hash,gateway_admin) VALUES ($1,$2,$3,false)",
+        )
+        .bind(user_id)
+        .bind(&email)
+        .bind(password_hash)
+        .execute(&mut *transaction)
+        .await
+        .map_err(map_error)?;
+        sqlx::query(
+            "INSERT INTO tenants (id,name,slug,daily_token_limit) VALUES ($1,$2,$3,100000)",
+        )
+        .bind(tenant_id.to_string())
+        .bind(&tenant_name)
+        .bind(slug(&tenant_name, tenant_id))
+        .execute(&mut *transaction)
+        .await
+        .map_err(map_error)?;
+        sqlx::query(
+            "INSERT INTO tenant_memberships (tenant_id,user_id,role) VALUES ($1,$2,'owner')",
+        )
+        .bind(tenant_id.to_string())
+        .bind(user_id)
+        .execute(&mut *transaction)
+        .await
+        .map_err(map_error)?;
+        sqlx::query("DELETE FROM pending_registrations WHERE email=$1")
+            .bind(&email)
+            .execute(&mut *transaction)
+            .await
+            .map_err(map_error)?;
+        transaction.commit().await.map_err(map_error)?;
+        Ok(VerificationResult { email })
     }
 
     async fn create_session(
@@ -209,6 +323,73 @@ impl IdentityRepository for PostgresStore {
             .execute(&mut *transaction)
             .await
             .map_err(map_error)?;
+        let membership = Membership {
+            tenant_id: Uuid::parse_str(&tenant).map_err(|_| WebAuthError::Unavailable)?,
+            tenant_name: row.try_get("name").map_err(|_| WebAuthError::Unavailable)?,
+            role,
+        };
+        transaction.commit().await.map_err(map_error)?;
+        Ok(membership)
+    }
+
+    async fn register_invitation(
+        &self,
+        token_hash: &[u8],
+        user: &WebUser,
+        session_hash: &[u8],
+        session_expires_at: DateTime<Utc>,
+        now: DateTime<Utc>,
+    ) -> Result<Membership, WebAuthError> {
+        let mut transaction = self.pool.begin().await.map_err(map_error)?;
+        let row = sqlx::query(
+            "SELECT i.id,i.email,i.tenant_id,i.role,t.name
+             FROM tenant_invitations i
+             JOIN tenants t ON t.id=i.tenant_id
+             WHERE i.token_hash=$1 AND i.accepted_at IS NULL AND i.expires_at>$2
+             FOR UPDATE",
+        )
+        .bind(token_hash)
+        .bind(now)
+        .fetch_optional(&mut *transaction)
+        .await
+        .map_err(map_error)?
+        .ok_or(WebAuthError::Invalid)?;
+        let email: String = row
+            .try_get("email")
+            .map_err(|_| WebAuthError::Unavailable)?;
+        let tenant: String = row
+            .try_get("tenant_id")
+            .map_err(|_| WebAuthError::Unavailable)?;
+        let role = parse_role(
+            &row.try_get::<String, _>("role")
+                .map_err(|_| WebAuthError::Unavailable)?,
+        )?;
+        sqlx::query(
+            "INSERT INTO users (id,email,password_hash,gateway_admin) VALUES ($1,$2,$3,false)",
+        )
+        .bind(user.id)
+        .bind(&email)
+        .bind(&user.password_hash)
+        .execute(&mut *transaction)
+        .await
+        .map_err(map_error)?;
+        sqlx::query("INSERT INTO tenant_memberships (tenant_id,user_id,role) VALUES ($1,$2,$3)")
+            .bind(&tenant)
+            .bind(user.id)
+            .bind(role.as_str())
+            .execute(&mut *transaction)
+            .await
+            .map_err(map_error)?;
+        sqlx::query("UPDATE tenant_invitations SET accepted_at=$2 WHERE id=$1")
+            .bind(
+                row.try_get::<Uuid, _>("id")
+                    .map_err(|_| WebAuthError::Unavailable)?,
+            )
+            .bind(now)
+            .execute(&mut *transaction)
+            .await
+            .map_err(map_error)?;
+        insert_session(&mut transaction, user.id, session_hash, session_expires_at).await?;
         let membership = Membership {
             tenant_id: Uuid::parse_str(&tenant).map_err(|_| WebAuthError::Unavailable)?,
             tenant_name: row.try_get("name").map_err(|_| WebAuthError::Unavailable)?,

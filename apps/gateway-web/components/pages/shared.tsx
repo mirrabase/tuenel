@@ -198,9 +198,9 @@ export function useGatewayData<T>(path: string, projectId?: string) {
 }
 
 export function useGatewayEndpoint() {
-  return React.useSyncExternalStore(
-    () => () => {},
-    () => `${window.location.origin}/v1`,
-    () => "/v1"
-  )
+  return useGateway().gatewayEndpoint
+}
+
+export function useGatewayOrigin() {
+  return useGatewayEndpoint().replace(/\/v1$/, "")
 }

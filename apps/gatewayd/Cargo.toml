@@ -19,6 +19,7 @@ gateway-core = { path = "../../crates/gateway-core" }
 gateway-keys = { path = "../../crates/gateway-keys" }
 gateway-incidents = { path = "../../crates/gateway-incidents" }
 gateway-events = { path = "../../crates/gateway-events" }
+gateway-entitlements = { path = "../../crates/gateway-entitlements" }
 gateway-mcp = { path = "../../crates/gateway-mcp" }
 gateway-metering = { path = "../../crates/gateway-metering" }
 gateway-observability = { path = "../../crates/gateway-observability" }
@@ -41,6 +42,7 @@ security-secrets = { path = "../../security/security-secrets" }
 security-sensitive-data = { path = "../../security/security-sensitive-data" }
 security-prompt-injection = { path = "../../security/security-prompt-injection" }
 secrecy.workspace = true
+reqwest.workspace = true
 serde_json.workspace = true
 sqlx.workspace = true
 store-postgres = { path = "../../stores/store-postgres" }

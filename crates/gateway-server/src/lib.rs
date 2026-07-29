@@ -18,9 +18,13 @@ use axum::{
 use chrono::{DateTime, Utc};
 use futures::StreamExt;
 use gateway_auth::{
-    AuthError, Authenticator, LoginResult, OrganizationUpdate, Signup, WebAuthError, WebAuthService,
+    AuthError, Authenticator, Bootstrap, LoginResult, OrganizationUpdate, Signup, WebAuthError,
+    WebAuthService,
 };
 use gateway_core::{GatewayError, GatewayRuntime};
+use gateway_entitlements::{
+    Capability, Edition, EntitlementContext, EntitlementDecision, EntitlementProvider,
+};
 use gateway_keys::VirtualKeyService;
 use gateway_quota::QuotaError;
 use gateway_store::GatewayStore;
@@ -83,6 +87,14 @@ pub struct AppState {
     pub audit: Option<gateway_events::AuditService>,
     /// PostgreSQL-backed control-plane administration.
     pub admin: Option<gateway_admin::AdminService>,
+    /// Deployment topology exposed in operational status and auth capabilities.
+    pub deployment_mode: String,
+    /// Product edition exposed as non-sensitive capability metadata.
+    pub edition: Edition,
+    /// Stable installation identity used only as input to entitlement decisions.
+    pub installation_id: Uuid,
+    /// Edition-neutral capability provider.
+    pub entitlements: Arc<dyn EntitlementProvider>,
 }
 
 /// Build the complete HTTP router.
@@ -93,7 +105,15 @@ pub fn router(state: AppState) -> Router {
         .route("/ready", get(ready))
         .route("/openapi.json", get(openapi))
         .route("/metrics", get(metrics))
+        .route("/auth/capabilities", get(auth_capabilities))
+        .route(
+            "/auth/tenants/{tenant_id}/capabilities",
+            get(tenant_capabilities),
+        )
+        .route("/auth/bootstrap", post(bootstrap))
         .route("/auth/signup", post(signup))
+        .route("/auth/verify", post(verify))
+        .route("/auth/verification/resend", post(resend_verification))
         .route("/auth/login", post(login))
         .route("/auth/session", get(session).delete(logout))
         .route(
@@ -116,6 +136,7 @@ pub fn router(state: AppState) -> Router {
         )
         .route("/auth/tenants", post(create_tenant))
         .route("/auth/invitations/accept", post(accept_invitation))
+        .route("/auth/invitations/register", post(register_invitation))
         .route("/v1/models", get(models))
         .route("/v1/chat/completions", post(chat_completions))
         .route("/v1/responses", post(responses))
@@ -184,6 +205,8 @@ fn v03_openapi_paths() -> Vec<(&'static str, &'static [&'static str])> {
         ),
         ("/admin/security/incidents/{incident_id}/timeline", &["get"]),
         ("/admin/tenants", &["get"]),
+        ("/auth/capabilities", &["get"]),
+        ("/auth/tenants/{tenant_id}/capabilities", &["get"]),
         ("/admin/projects", &["get", "post"]),
         ("/admin/projects/{id}", &["patch", "delete"]),
         ("/auth/tenants/{tenant_id}/members", &["get"]),
@@ -238,7 +261,7 @@ fn v03_openapi_paths() -> Vec<(&'static str, &'static [&'static str])> {
         EmbeddingsRequest, EmbeddingsInput, EmbeddingsResponse, EmbeddingData,
         CreateVirtualKeyRequest, CreateVirtualKeyResponse, ErrorEnvelope, ErrorObject
     )),
-    tags((name = "gateway", description = "Tuenel Gateway v0.3"))
+    tags((name = "gateway", description = "Tuenel Gateway v0.4"))
 )]
 struct ApiDoc;
 
@@ -283,6 +306,24 @@ struct SignupRequest {
 }
 
 #[derive(Deserialize)]
+struct BootstrapRequest {
+    token: String,
+    email: String,
+    password: String,
+    tenant_name: String,
+}
+
+#[derive(Deserialize)]
+struct VerifyRequest {
+    token: String,
+}
+
+#[derive(Deserialize)]
+struct ResendVerificationRequest {
+    email: String,
+}
+
+#[derive(Deserialize)]
 struct LoginRequest {
     email: String,
     password: String,
@@ -302,6 +343,12 @@ struct CreateTenantRequest {
 #[derive(Deserialize)]
 struct AcceptInvitationRequest {
     token: String,
+}
+
+#[derive(Deserialize)]
+struct RegisterInvitationRequest {
+    token: String,
+    password: String,
 }
 
 #[derive(Deserialize)]
@@ -326,7 +373,105 @@ async fn signup(
         })
         .await
         .map_err(map_web_auth)?;
+    Ok((
+        StatusCode::ACCEPTED,
+        Json(json!({ "email": result.email, "verification_required": true })),
+    ))
+}
+
+async fn auth_capabilities(State(state): State<AppState>) -> Result<Json<Value>, ApiError> {
+    let auth = web_auth(&state)?
+        .capabilities()
+        .await
+        .map_err(map_web_auth)?;
+    let decisions = capability_decisions(&state, None).await?;
+    Ok(Json(json!({
+        "deployment_mode": auth.deployment_mode,
+        "registration_mode": auth.registration_mode,
+        "bootstrap_required": auth.bootstrap_required,
+        "email_verification_required": auth.email_verification_required,
+        "edition": state.edition,
+        "instance_capabilities": decisions,
+    })))
+}
+
+async fn tenant_capabilities(
+    State(state): State<AppState>,
+    Path(tenant_id): Path<Uuid>,
+    headers: HeaderMap,
+) -> Result<Json<Value>, ApiError> {
+    let principal = authenticate(&state, &headers).await?;
+    ensure_principal_tenant(&principal, tenant_id)?;
+    let decisions = capability_decisions(&state, Some(principal.tenant_id.clone())).await?;
+    Ok(Json(json!({
+        "edition": state.edition,
+        "tenant_id": principal.tenant_id,
+        "capabilities": decisions,
+    })))
+}
+
+fn ensure_principal_tenant(principal: &Principal, tenant_id: Uuid) -> Result<(), ApiError> {
+    (principal.tenant_id == tenant_id.to_string())
+        .then_some(())
+        .ok_or_else(|| ApiError::forbidden("credential is not valid for this tenant"))
+}
+
+async fn capability_decisions(
+    state: &AppState,
+    tenant_id: Option<String>,
+) -> Result<Value, ApiError> {
+    let context = EntitlementContext {
+        tenant_id,
+        installation_id: state.installation_id,
+    };
+    let mut decisions = serde_json::Map::new();
+    for capability in Capability::ALL {
+        let decision: EntitlementDecision = state
+            .entitlements
+            .decision(&context, capability)
+            .await
+            .map_err(|_| ApiError::service_unavailable("capability state unavailable"))?;
+        decisions.insert(capability.as_str().to_owned(), json!(decision));
+    }
+    Ok(Value::Object(decisions))
+}
+
+async fn bootstrap(
+    State(state): State<AppState>,
+    Json(input): Json<BootstrapRequest>,
+) -> Result<(StatusCode, Json<Value>), ApiError> {
+    let result = web_auth(&state)?
+        .bootstrap(Bootstrap {
+            token: input.token,
+            email: input.email,
+            password: input.password,
+            tenant_name: input.tenant_name,
+        })
+        .await
+        .map_err(map_web_auth)?;
     Ok((StatusCode::CREATED, Json(login_json(result))))
+}
+
+async fn verify(
+    State(state): State<AppState>,
+    Json(input): Json<VerifyRequest>,
+) -> Result<Json<Value>, ApiError> {
+    let result = web_auth(&state)?
+        .verify(&input.token)
+        .await
+        .map_err(map_web_auth)?;
+    Ok(Json(json!({ "email": result.email, "verified": true })))
+}
+
+async fn resend_verification(
+    State(state): State<AppState>,
+    Json(input): Json<ResendVerificationRequest>,
+) -> Result<Json<Value>, ApiError> {
+    web_auth(&state)?
+        .resend_verification(&input.email)
+        .await
+        .map_err(map_web_auth)?;
+    Ok(Json(json!({ "ok": true })))
 }
 
 async fn login(
@@ -381,8 +526,9 @@ async fn create_invitation(
         StatusCode::CREATED,
         Json(json!({
             "id": invitation.id,
-            "token": invitation.token.expose(),
+            "token": invitation.token.as_ref().map(|token| token.expose()),
             "expires_at": invitation.expires_at,
+            "delivery": invitation.delivery,
         })),
     ))
 }
@@ -502,6 +648,18 @@ async fn accept_invitation(
         .map_err(map_web_auth)
 }
 
+async fn register_invitation(
+    State(state): State<AppState>,
+    Json(input): Json<RegisterInvitationRequest>,
+) -> Result<Json<Value>, ApiError> {
+    web_auth(&state)?
+        .register_invitation(&input.token, &input.password)
+        .await
+        .map(login_json)
+        .map(Json)
+        .map_err(map_web_auth)
+}
+
 fn login_json(result: LoginResult) -> Value {
     json!({
         "user_id": result.user_id,
@@ -541,6 +699,30 @@ fn map_web_auth(error: WebAuthError) -> ApiError {
         WebAuthError::Conflict => ApiError::conflict("identity already exists"),
         WebAuthError::Forbidden => ApiError::forbidden("operation is not permitted"),
         WebAuthError::NotFound => ApiError::not_found("identity record not found"),
+        WebAuthError::RegistrationClosed => ApiError::new(
+            StatusCode::FORBIDDEN,
+            "permission_error",
+            "registration_closed",
+            "registration is closed",
+        ),
+        WebAuthError::BootstrapConsumed => ApiError::new(
+            StatusCode::CONFLICT,
+            "invalid_request_error",
+            "bootstrap_consumed",
+            "installation bootstrap has already been completed",
+        ),
+        WebAuthError::InvalidBootstrapToken => ApiError::new(
+            StatusCode::UNAUTHORIZED,
+            "authentication_error",
+            "invalid_bootstrap_token",
+            "invalid bootstrap token",
+        ),
+        WebAuthError::RateLimited => ApiError::new(
+            StatusCode::TOO_MANY_REQUESTS,
+            "rate_limit_error",
+            "rate_limited",
+            "too many authentication attempts",
+        ),
         WebAuthError::Hashing | WebAuthError::Unavailable => {
             ApiError::service_unavailable("authentication unavailable")
         }
@@ -1636,7 +1818,9 @@ mod tests {
     use axum::http::HeaderMap;
     use gateway_types::{AuthenticationMethod, Principal};
 
-    use super::{ChatCompletionRequest, StopInput, bind_project, openapi_document};
+    use super::{
+        ChatCompletionRequest, StopInput, bind_project, ensure_principal_tenant, openapi_document,
+    };
 
     #[test]
     fn committed_openapi_matches_generated_document() {
@@ -1677,11 +1861,13 @@ mod tests {
             virtual_key_id: None,
         };
         assert_eq!(
-            bind_project(principal, &headers)
+            bind_project(principal.clone(), &headers)
                 .unwrap()
                 .project_id
                 .as_deref(),
             Some("01900000-0000-7000-8000-000000000002")
         );
+        let other_tenant = "01900000-0000-7000-8000-000000000003".parse().unwrap();
+        assert!(ensure_principal_tenant(&principal, other_tenant).is_err());
     }
 }

@@ -3,9 +3,11 @@
 mod web;
 
 pub use web::{
-    IdentityRepository, InvitationResult, LoginResult, Membership, Organization,
-    OrganizationUpdate, PendingInvitation, SessionInfo, Signup, TenantRole, WebAuthError,
-    WebAuthService, WebUser,
+    AuthAttemptLimiter, AuthCapabilities, AuthEmailKind, AuthEmailQueue, Bootstrap,
+    IdentityRepository, InvitationDelivery, InvitationResult, LoginResult, Membership,
+    Organization, OrganizationUpdate, PendingInvitation, RegistrationMode, SessionInfo, Signup,
+    SignupResult, TenantRole, TrustedSessionIssuer, VerificationEmailSender, VerificationResult,
+    WebAuthError, WebAuthService, WebUser,
 };
 
 use std::{sync::Arc, time::Duration};

@@ -13,7 +13,7 @@ import {
 } from "@phosphor-icons/react"
 import { toast } from "sonner"
 
-import { useGatewayEndpoint } from "@/components/pages/shared"
+import { useGatewayEndpoint, useGatewayOrigin } from "@/components/pages/shared"
 import { Button } from "@/components/ui/button"
 import { Card, CardContent } from "@/components/ui/card"
 import {
@@ -331,6 +331,7 @@ function parseOpenApiEndpoints(spec?: JsonRecord): {
 
 export function ApiReferenceView({ specData }: { specData?: JsonRecord }) {
   const gatewayEndpoint = useGatewayEndpoint()
+  const gatewayOrigin = useGatewayOrigin()
   const { endpoints, schemas } = React.useMemo(
     () => parseOpenApiEndpoints(specData),
     [specData]
@@ -382,7 +383,7 @@ export function ApiReferenceView({ specData }: { specData?: JsonRecord }) {
     const startTime = performance.now()
 
     try {
-      const url = `${gatewayEndpoint}${activeEndpoint.path}`
+      const url = `${gatewayOrigin}${activeEndpoint.path}`
       const init: RequestInit = {
         method: activeEndpoint.method.toUpperCase(),
         headers: {
@@ -465,7 +466,7 @@ export function ApiReferenceView({ specData }: { specData?: JsonRecord }) {
               API Reference
             </h2>
             <p className="font-mono text-[11px] text-muted-foreground">
-              {gatewayEndpoint}/v1
+              {gatewayEndpoint}
             </p>
           </div>
         </div>
@@ -567,7 +568,7 @@ export function ApiReferenceView({ specData }: { specData?: JsonRecord }) {
                     variant="ghost"
                     onClick={() =>
                       navigator.clipboard
-                        .writeText(`${gatewayEndpoint}${activeEndpoint.path}`)
+                        .writeText(`${gatewayOrigin}${activeEndpoint.path}`)
                         .then(() => toast.success("Endpoint URL copied"))
                     }
                   >

@@ -2,10 +2,15 @@ use std::{sync::Arc, time::Duration};
 
 use chrono::Utc;
 use gateway_approval::{ApprovalRepository, ApprovalService};
-use gateway_auth::{AuthService, IdentityRepository, JwtAuthenticator, WebAuthService};
+use gateway_auth::{
+    AuthAttemptLimiter, AuthEmailKind, AuthEmailQueue, AuthService, IdentityRepository,
+    InvitationDelivery, JwtAuthenticator, RegistrationMode, VerificationEmailSender, WebAuthError,
+    WebAuthService,
+};
 use gateway_billing::{BillingRepository, BillingWorker};
 use gateway_config::Settings;
 use gateway_core::{GatewayRuntime, GatewayService};
+use gateway_entitlements::{CommunityEntitlements, Edition, EntitlementStateRepository};
 use gateway_events::{AuditRepository, AuditService};
 use gateway_incidents::{IncidentRepository, IncidentService};
 use gateway_keys::VirtualKeyService;
@@ -22,7 +27,7 @@ use gateway_providers::{
 };
 use gateway_quota::QuotaService;
 use gateway_routing::{RoutePlan, RouteTarget, StaticRouter};
-use gateway_secrets::{SecretRepository, SecretService};
+use gateway_secrets::{SecretCipher, SecretRepository, SecretService};
 use gateway_security::{SecurityEnforcer, SecurityInspector, SecurityPipeline, SecurityRepository};
 use gateway_server::AppState;
 use gateway_store::GatewayStore;
@@ -34,9 +39,270 @@ use provider_anthropic::AnthropicProvider;
 use provider_gemini::GeminiProvider;
 use provider_openai_compatible::OpenAiCompatibleProvider;
 use secrecy::{ExposeSecret, SecretString};
+use sqlx::Row;
 use store_postgres::PostgresStore;
 use tokio::signal;
 use uuid::Uuid;
+
+#[derive(Clone)]
+struct ResendEmailSender {
+    client: reqwest::Client,
+    api_key: SecretString,
+    from: String,
+    app_url: url::Url,
+}
+
+impl ResendEmailSender {
+    async fn deliver(
+        &self,
+        event_id: Uuid,
+        email: &str,
+        subject: &str,
+        path: &str,
+        token: &str,
+    ) -> Result<(), WebAuthError> {
+        let mut target = self.app_url.clone();
+        target.set_path(path);
+        target.set_fragment(Some(&format!("token={token}")));
+        let response = self
+            .client
+            .post("https://api.resend.com/emails")
+            .bearer_auth(self.api_key.expose_secret())
+            .header("Idempotency-Key", event_id.to_string())
+            .json(&serde_json::json!({
+                "from": self.from,
+                "to": [email],
+                "subject": subject,
+                "html": format!("<p>{subject}</p><p><a href=\"{target}\">Continue</a></p>"),
+            }))
+            .send()
+            .await
+            .map_err(|_| WebAuthError::Unavailable)?;
+        response
+            .error_for_status()
+            .map(|_| ())
+            .map_err(|_| WebAuthError::Unavailable)
+    }
+}
+
+#[async_trait::async_trait]
+impl VerificationEmailSender for ResendEmailSender {
+    async fn send_verification(
+        &self,
+        event_id: Uuid,
+        email: &str,
+        token: &str,
+    ) -> Result<(), WebAuthError> {
+        self.deliver(
+            event_id,
+            email,
+            "Verify your Tuenel account",
+            "/en/verify",
+            token,
+        )
+        .await
+    }
+
+    async fn send_invitation(
+        &self,
+        event_id: Uuid,
+        email: &str,
+        token: &str,
+    ) -> Result<(), WebAuthError> {
+        self.deliver(
+            event_id,
+            email,
+            "You are invited to Tuenel",
+            "/en/invite",
+            token,
+        )
+        .await
+    }
+}
+
+#[derive(Clone)]
+struct PostgresAuthEmailQueue {
+    store: Arc<PostgresStore>,
+    cipher: SecretCipher,
+}
+
+struct ClaimedAuthEmail {
+    event_id: Uuid,
+    kind: AuthEmailKind,
+    recipient: String,
+    nonce: Vec<u8>,
+    ciphertext: Vec<u8>,
+    attempt_count: i32,
+}
+
+impl PostgresAuthEmailQueue {
+    fn aad(event_id: Uuid, kind: AuthEmailKind, recipient: &str) -> String {
+        format!("auth-email:{event_id}:{}:{recipient}", kind.as_str())
+    }
+
+    async fn claim(&self) -> Result<Option<ClaimedAuthEmail>, WebAuthError> {
+        let row = sqlx::query(
+            "UPDATE auth_email_outbox SET attempt_count=attempt_count+1,
+                    next_attempt_at=now()+interval '5 minutes'
+             WHERE event_id=(
+                SELECT event_id FROM auth_email_outbox
+                WHERE delivered_at IS NULL AND next_attempt_at<=now() AND attempt_count<10
+                ORDER BY next_attempt_at,created_at
+                FOR UPDATE SKIP LOCKED LIMIT 1
+             )
+             RETURNING event_id,delivery_kind,recipient,nonce,ciphertext,attempt_count",
+        )
+        .fetch_optional(self.store.pool())
+        .await
+        .map_err(|_| WebAuthError::Unavailable)?;
+        row.map(|row| {
+            let kind = match row
+                .try_get::<String, _>("delivery_kind")
+                .map_err(|_| WebAuthError::Unavailable)?
+                .as_str()
+            {
+                "verification" => AuthEmailKind::Verification,
+                "invitation" => AuthEmailKind::Invitation,
+                _ => return Err(WebAuthError::Unavailable),
+            };
+            Ok(ClaimedAuthEmail {
+                event_id: row
+                    .try_get("event_id")
+                    .map_err(|_| WebAuthError::Unavailable)?,
+                kind,
+                recipient: row
+                    .try_get("recipient")
+                    .map_err(|_| WebAuthError::Unavailable)?,
+                nonce: row
+                    .try_get("nonce")
+                    .map_err(|_| WebAuthError::Unavailable)?,
+                ciphertext: row
+                    .try_get("ciphertext")
+                    .map_err(|_| WebAuthError::Unavailable)?,
+                attempt_count: row
+                    .try_get("attempt_count")
+                    .map_err(|_| WebAuthError::Unavailable)?,
+            })
+        })
+        .transpose()
+    }
+
+    async fn delivered(&self, event_id: Uuid) -> Result<(), WebAuthError> {
+        sqlx::query(
+            "UPDATE auth_email_outbox
+             SET delivered_at=now(),nonce=$2,ciphertext=$2,last_error_code=NULL
+             WHERE event_id=$1",
+        )
+        .bind(event_id)
+        .bind(Vec::<u8>::new())
+        .execute(self.store.pool())
+        .await
+        .map(|_| ())
+        .map_err(|_| WebAuthError::Unavailable)
+    }
+
+    async fn failed(&self, event: &ClaimedAuthEmail) -> Result<(), WebAuthError> {
+        let delay = 2_i64.pow(u32::try_from(event.attempt_count.min(10)).unwrap_or(10));
+        sqlx::query(
+            "UPDATE auth_email_outbox
+             SET next_attempt_at=now()+make_interval(secs=>$2::double precision),
+                    last_error_code='provider_unavailable'
+             WHERE event_id=$1",
+        )
+        .bind(event.event_id)
+        .bind(delay)
+        .execute(self.store.pool())
+        .await
+        .map(|_| ())
+        .map_err(|_| WebAuthError::Unavailable)
+    }
+}
+
+#[async_trait::async_trait]
+impl AuthEmailQueue for PostgresAuthEmailQueue {
+    async fn enqueue(
+        &self,
+        kind: AuthEmailKind,
+        email: &str,
+        token: &str,
+    ) -> Result<(), WebAuthError> {
+        let event_id = Uuid::now_v7();
+        let aad = Self::aad(event_id, kind, email);
+        let encrypted = self
+            .cipher
+            .seal(aad.as_bytes(), token.as_bytes())
+            .map_err(|_| WebAuthError::Unavailable)?;
+        sqlx::query(
+            "INSERT INTO auth_email_outbox
+             (event_id,delivery_kind,recipient,nonce,ciphertext)
+             VALUES($1,$2,$3,$4,$5)",
+        )
+        .bind(event_id)
+        .bind(kind.as_str())
+        .bind(email)
+        .bind(encrypted.nonce)
+        .bind(encrypted.ciphertext)
+        .execute(self.store.pool())
+        .await
+        .map(|_| ())
+        .map_err(|_| WebAuthError::Unavailable)
+    }
+}
+
+fn spawn_auth_email_worker(
+    queue: Arc<PostgresAuthEmailQueue>,
+    sender: Arc<dyn VerificationEmailSender>,
+) {
+    tokio::spawn(async move {
+        loop {
+            match queue.claim().await {
+                Ok(Some(event)) => {
+                    let aad =
+                        PostgresAuthEmailQueue::aad(event.event_id, event.kind, &event.recipient);
+                    let delivery = queue
+                        .cipher
+                        .open(aad.as_bytes(), &event.nonce, &event.ciphertext)
+                        .ok()
+                        .and_then(|value| String::from_utf8(value).ok());
+                    let result = match delivery {
+                        Some(token) if event.kind == AuthEmailKind::Verification => {
+                            sender
+                                .send_verification(event.event_id, &event.recipient, &token)
+                                .await
+                        }
+                        Some(token) => {
+                            sender
+                                .send_invitation(event.event_id, &event.recipient, &token)
+                                .await
+                        }
+                        None => Err(WebAuthError::Unavailable),
+                    };
+                    if result.is_ok() {
+                        let _ = queue.delivered(event.event_id).await;
+                        tracing::info!(
+                            event_id = %event.event_id,
+                            delivery_kind = event.kind.as_str(),
+                            "authentication email delivered"
+                        );
+                    } else {
+                        let _ = queue.failed(&event).await;
+                        tracing::warn!(
+                            event_id = %event.event_id,
+                            delivery_kind = event.kind.as_str(),
+                            attempt = event.attempt_count,
+                            "authentication email delivery failed; retry scheduled"
+                        );
+                    }
+                }
+                Ok(None) => tokio::time::sleep(Duration::from_secs(2)).await,
+                Err(_) => {
+                    tracing::warn!("authentication email outbox unavailable");
+                    tokio::time::sleep(Duration::from_secs(5)).await;
+                }
+            }
+        }
+    });
+}
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
@@ -55,6 +321,14 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     }
     let postgres = Arc::new(PostgresStore::connect(settings.database_url.expose_secret()).await?);
     tracing::info!("PostgreSQL connected and migrations applied");
+    let installation_id = EntitlementStateRepository::installation_id(postgres.as_ref()).await?;
+    if !IdentityRepository::installation_initialized(postgres.as_ref()).await?
+        && settings.bootstrap_token_hash.is_none()
+    {
+        return Err(
+            "AUTH_BOOTSTRAP_TOKEN_HASH is required for an uninitialized installation".into(),
+        );
+    }
     let store: Arc<dyn GatewayStore> = postgres.clone();
     let keys = VirtualKeyService::new(store.clone());
     let jwt = match (
@@ -72,11 +346,50 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
             None
         }
     };
+    let verification_sender = match (
+        settings.resend_api_key.clone(),
+        settings.resend_from.clone(),
+        settings.app_url.clone(),
+    ) {
+        (Some(api_key), Some(from), Some(app_url)) => Some(Arc::new(ResendEmailSender {
+            client: reqwest::Client::new(),
+            api_key,
+            from,
+            app_url,
+        })
+            as Arc<dyn VerificationEmailSender>),
+        _ => None,
+    };
+    let email_queue = if let Some(sender) = verification_sender.clone() {
+        let queue = Arc::new(PostgresAuthEmailQueue {
+            store: postgres.clone(),
+            cipher: SecretCipher::new(settings.credentials_master_key.expose_secret())?,
+        });
+        spawn_auth_email_worker(queue.clone(), sender);
+        Some(queue as Arc<dyn AuthEmailQueue>)
+    } else {
+        None
+    };
     let web_auth = WebAuthService::new(
         postgres.clone() as Arc<dyn IdentityRepository>,
         Duration::from_secs(12 * 60 * 60),
+    )
+    .with_registration(
+        settings.deployment_mode.clone(),
+        match settings.registration_mode.as_str() {
+            "public" => RegistrationMode::Public,
+            "closed" => RegistrationMode::Closed,
+            _ => RegistrationMode::InviteOnly,
+        },
+        settings.bootstrap_token_hash.clone(),
+        match settings.invitation_delivery.as_str() {
+            "email" => InvitationDelivery::Email,
+            _ => InvitationDelivery::Manual,
+        },
     );
-    let authenticator = Arc::new(AuthService::new(jwt, keys.clone()).with_web(web_auth.clone()));
+    let web_auth = email_queue.map_or(web_auth.clone(), |queue| {
+        web_auth.clone().with_email_queue(queue)
+    });
     let pricing = Pricing {
         input_per_million: settings.input_cost_per_million,
         output_per_million: settings.output_cost_per_million,
@@ -88,6 +401,15 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
         16,
     )?);
     redis.ping().await?;
+    let web_auth = web_auth.with_attempt_limiter(
+        redis.clone() as Arc<dyn AuthAttemptLimiter>,
+        settings
+            .credentials_master_key
+            .expose_secret()
+            .as_bytes()
+            .to_vec(),
+    );
+    let authenticator = Arc::new(AuthService::new(jwt, keys.clone()).with_web(web_auth.clone()));
     let quota =
         QuotaService::new(store.clone(), settings.reservation_ttl).with_counter(redis.clone());
     let mut providers: Vec<Arc<dyn ModelProvider>> = Vec::new();
@@ -352,6 +674,10 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
             )
             .with_secrets(secrets),
         ),
+        deployment_mode: settings.deployment_mode.clone(),
+        edition: Edition::Community,
+        installation_id,
+        entitlements: Arc::new(CommunityEntitlements),
     });
     let listener = tokio::net::TcpListener::bind(settings.bind_addr).await?;
     tracing::info!(address = %settings.bind_addr, "gateway listening");

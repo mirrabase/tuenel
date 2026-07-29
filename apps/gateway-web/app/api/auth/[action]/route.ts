@@ -7,12 +7,33 @@ import {
   seal,
   sessionCredential,
 } from "@/lib/server-auth"
+import { hasValidOrigin } from "@/lib/request-origin"
+
+export async function GET(
+  _request: Request,
+  { params }: { params: Promise<{ action: string }> }
+) {
+  const { action } = await params
+  if (action !== "capabilities")
+    return NextResponse.json({ error: "Not found" }, { status: 404 })
+  const upstream = await fetch(gatewayApiUrl("/auth/capabilities"), {
+    cache: "no-store",
+  })
+  return NextResponse.json(await upstream.json().catch(() => ({})), {
+    status: upstream.status,
+  })
+}
 
 export async function POST(
   request: Request,
   { params }: { params: Promise<{ action: string }> }
 ) {
   const { action } = await params
+  if (!hasValidOrigin(request))
+    return NextResponse.json(
+      { error: "Invalid request origin" },
+      { status: 403 }
+    )
   if (action === "logout") {
     const credential = await sessionCredential()
     if (credential)
@@ -43,10 +64,25 @@ export async function POST(
       status: upstream.status,
     })
   }
-  if (action !== "login" && action !== "signup")
+  if (
+    ![
+      "login",
+      "signup",
+      "verify",
+      "verification-resend",
+      "bootstrap",
+      "invitation-register",
+    ].includes(action)
+  )
     return NextResponse.json({ error: "Not found" }, { status: 404 })
 
-  const upstream = await fetch(gatewayApiUrl(`/auth/${action}`), {
+  const upstreamPath =
+    action === "verification-resend"
+      ? "/auth/verification/resend"
+      : action === "invitation-register"
+        ? "/auth/invitations/register"
+        : `/auth/${action}`
+  const upstream = await fetch(gatewayApiUrl(upstreamPath), {
     method: "POST",
     headers: { "content-type": "application/json" },
     body: await request.text(),
@@ -57,6 +93,9 @@ export async function POST(
       { error: data?.error?.message ?? "Authentication failed" },
       { status: upstream.status }
     )
+
+  if (!["login", "bootstrap", "invitation-register"].includes(action))
+    return NextResponse.json(data, { status: upstream.status })
 
   const credential = data.credential as string
   delete data.credential
