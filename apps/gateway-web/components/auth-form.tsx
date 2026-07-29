@@ -56,16 +56,19 @@ export function AuthForm({
   mode,
   locale,
   allowSignup = false,
+  allowSso = false,
 }: {
   mode: "login" | "signup"
   locale: Locale
   allowSignup?: boolean
+  allowSso?: boolean
 }) {
   const text = copy[locale]
   const router = useRouter()
   const [pending, setPending] = React.useState(false)
   const [error, setError] = React.useState<string>()
   const [verificationSent, setVerificationSent] = React.useState(false)
+  const [tenantSlug, setTenantSlug] = React.useState("")
 
   async function submit(event: React.FormEvent<HTMLFormElement>) {
     event.preventDefault()
@@ -97,6 +100,24 @@ export function AuthForm({
     }
     router.replace(`/${locale}`)
     router.refresh()
+  }
+
+  async function startSso() {
+    setPending(true)
+    setError(undefined)
+    try {
+      const response = await fetch("/api/auth/sso-start", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ tenant_slug: tenantSlug, locale }),
+      })
+      const result = await response.json().catch(() => ({}))
+      if (!response.ok) throw new Error(result.error ?? "SSO is unavailable")
+      window.location.assign(result.authorization_url)
+    } catch (reason) {
+      setError(reason instanceof Error ? reason.message : "SSO is unavailable")
+      setPending(false)
+    }
   }
 
   return (
@@ -164,6 +185,29 @@ export function AuthForm({
             </Button>
           </FieldGroup>
         </form>
+        {mode === "login" && allowSso && (
+          <div className="mt-5 space-y-3 border-t pt-5">
+            <Field>
+              <FieldLabel htmlFor="sso-tenant">Organization slug</FieldLabel>
+              <Input
+                id="sso-tenant"
+                value={tenantSlug}
+                onChange={(event) => setTenantSlug(event.target.value)}
+                pattern="[a-z0-9]+(?:-[a-z0-9]+)*"
+                placeholder="acme"
+              />
+            </Field>
+            <Button
+              className="w-full"
+              type="button"
+              variant="outline"
+              disabled={pending || !tenantSlug}
+              onClick={() => void startSso()}
+            >
+              Continue with SSO
+            </Button>
+          </div>
+        )}
       </CardContent>
       {(mode === "signup" || allowSignup) && (
         <CardFooter>

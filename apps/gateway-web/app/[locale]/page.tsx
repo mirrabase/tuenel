@@ -15,5 +15,7 @@ export default async function OrganizationPage({
   if (!session) redirect(`/${locale}/login`)
   if (session.memberships.length === 1)
     redirect(`/${locale}/${session.memberships[0].tenant_id}/projects`)
-  return <OrganizationPicker locale={locale} memberships={session.memberships} />
+  return (
+    <OrganizationPicker locale={locale} memberships={session.memberships} />
+  )
 }

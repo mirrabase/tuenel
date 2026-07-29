@@ -447,13 +447,11 @@ export function ConsoleShell({ children }: { children: React.ReactNode }) {
                     (session as Record<string, unknown>).avatar ||
                     (session as Record<string, unknown>).image ? (
                       <img
-                        src={
-                          String(
-                            (session as Record<string, unknown>).avatarUrl ||
-                              (session as Record<string, unknown>).avatar ||
-                              (session as Record<string, unknown>).image
-                          )
-                        }
+                        src={String(
+                          (session as Record<string, unknown>).avatarUrl ||
+                            (session as Record<string, unknown>).avatar ||
+                            (session as Record<string, unknown>).image
+                        )}
                         alt="Profile photo"
                         className="size-full object-cover"
                       />
@@ -493,7 +491,7 @@ export function ConsoleShell({ children }: { children: React.ReactNode }) {
         </header>
         <div
           className={cn(
-            "flex flex-1 flex-col min-w-0 max-w-full",
+            "flex max-w-full min-w-0 flex-1 flex-col",
             playground
               ? "min-h-0 overflow-hidden p-4 sm:p-5"
               : "p-4 sm:p-6 lg:p-8"
@@ -559,9 +557,7 @@ export function ConsoleShell({ children }: { children: React.ReactNode }) {
           </Command>
         </div>
       )}
-      {helpOpen && (
-        <HelpModal open={helpOpen} onOpenChange={setHelpOpen} />
-      )}
+      {helpOpen && <HelpModal open={helpOpen} onOpenChange={setHelpOpen} />}
     </SidebarProvider>
   )
 }
@@ -598,7 +594,8 @@ function HelpModal({
             Help & Feedback
           </DialogTitle>
           <DialogDescription>
-            Found a bug, have a feature request, or need help? Send feedback directly to the team.
+            Found a bug, have a feature request, or need help? Send feedback
+            directly to the team.
           </DialogDescription>
         </DialogHeader>
 
@@ -608,7 +605,7 @@ function HelpModal({
             <select
               value={topic}
               onChange={(e) => setTopic(e.target.value)}
-              className="w-full rounded-md border bg-background px-3 py-2 text-xs text-foreground focus:outline-none focus:ring-2 focus:ring-ring/30"
+              className="w-full rounded-md border bg-background px-3 py-2 text-xs text-foreground focus:ring-2 focus:ring-ring/30 focus:outline-none"
             >
               <option value="feedback">General Feedback</option>
               <option value="bug">Report an Issue / Bug</option>
@@ -618,14 +615,16 @@ function HelpModal({
           </div>
 
           <div className="space-y-1.5">
-            <label className="text-xs font-medium text-foreground">Message</label>
+            <label className="text-xs font-medium text-foreground">
+              Message
+            </label>
             <textarea
               required
               rows={4}
               value={message}
               onChange={(e) => setMessage(e.target.value)}
               placeholder="Tell us what's on your mind or describe the issue..."
-              className="w-full rounded-md border bg-background p-3 text-xs text-foreground focus:outline-none focus:ring-2 focus:ring-ring/30"
+              className="w-full rounded-md border bg-background p-3 text-xs text-foreground focus:ring-2 focus:ring-ring/30 focus:outline-none"
             />
           </div>
 
@@ -638,7 +637,11 @@ function HelpModal({
             >
               Cancel
             </Button>
-            <Button type="submit" size="sm" disabled={sending || !message.trim()}>
+            <Button
+              type="submit"
+              size="sm"
+              disabled={sending || !message.trim()}
+            >
               {sending ? "Sending..." : "Submit Feedback"}
             </Button>
           </DialogFooter>
