@@ -21,7 +21,9 @@ jobs:
         with:
           fetch-depth: 0
       - name: Scan repository history
-        uses: gitleaks/gitleaks-action@v2
+        uses: docker://ghcr.io/gitleaks/gitleaks:v8.30.1
+        with:
+          args: git --no-banner --redact --verbose /github/workspace
 
   codeql:
     name: CodeQL
