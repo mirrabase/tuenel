@@ -1,19 +1,6 @@
 import { gatewayApiUrl, sessionCredential } from "@/lib/server-auth"
 import { hasValidOrigin } from "@/lib/request-origin"
-
-const rules: [RegExp, ReadonlySet<string>][] = [
-  [/^\/(health|ready|openapi\.json)$/, new Set(["GET"])],
-  [
-    /^\/auth\/(tenants|invitations)(\/|$)/,
-    new Set(["GET", "POST", "PATCH", "DELETE"]),
-  ],
-  [
-    /^\/v1\/(models|chat\/completions|responses|embeddings)$/,
-    new Set(["GET", "POST"]),
-  ],
-  [/^\/v1\/(mcp|gateway\/approvals)\//, new Set(["GET", "POST"])],
-  [/^\/admin\//, new Set(["GET", "POST", "PATCH", "DELETE"])],
-]
+import { allowedGatewayRoute } from "@/lib/gateway-route-policy"
 
 async function forward(
   request: Request,
@@ -21,10 +8,12 @@ async function forward(
 ) {
   const incoming = new URL(request.url)
   const path = `/${(await params).path.join("/")}`
-  const allowed = rules.some(
-    ([pattern, methods]) => pattern.test(path) && methods.has(request.method)
+  const tenant = incoming.searchParams.get("tenant")
+  if (
+    !tenant ||
+    !/^[0-9a-f-]{36}$/i.test(tenant) ||
+    !allowedGatewayRoute(path, request.method, tenant)
   )
-  if (!allowed)
     return Response.json(
       { error: { code: "not_found", message: "Gateway path is not allowed" } },
       { status: 404 }
@@ -36,8 +25,7 @@ async function forward(
     )
 
   const credential = await sessionCredential()
-  const tenant = incoming.searchParams.get("tenant")
-  if (!credential || !tenant || !/^[0-9a-f-]{36}$/i.test(tenant))
+  if (!credential)
     return Response.json(
       { error: { code: "unauthorized", message: "Authentication required" } },
       { status: 401 }
@@ -107,5 +95,6 @@ async function forward(
 
 export const GET = forward
 export const POST = forward
+export const PUT = forward
 export const PATCH = forward
 export const DELETE = forward
