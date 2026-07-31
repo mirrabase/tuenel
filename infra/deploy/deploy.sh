@@ -165,7 +165,7 @@ create_production_env() {
   fi
 
   echo "Creating a production environment. Existing files are never overwritten."
-  tuenel_version=$(prompt_required "Published Tuenel release tag (for example v1.0.0)")
+  tuenel_version=$(prompt_required "Published Tuenel container version (for example 1.0.0)")
   if [ "$tuenel_version" = "latest" ]; then
     echo "Production requires a pinned release tag, not latest." >&2
     exit 1

@@ -2,20 +2,17 @@
 
 import * as React from "react"
 import {
-  CheckIcon,
   CodeIcon,
   CopyIcon,
   DownloadSimpleIcon,
   FileCodeIcon,
   MagnifyingGlassIcon,
   PaperPlaneTiltIcon,
-  PlugsConnectedIcon,
 } from "@phosphor-icons/react"
 import { toast } from "sonner"
 
 import { useGatewayEndpoint, useGatewayOrigin } from "@/components/pages/shared"
 import { Button } from "@/components/ui/button"
-import { Card, CardContent } from "@/components/ui/card"
 import {
   Dialog,
   DialogContent,
@@ -24,7 +21,6 @@ import {
   DialogTitle,
 } from "@/components/ui/dialog"
 import { Input } from "@/components/ui/input"
-import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs"
 import { Textarea } from "@/components/ui/textarea"
 import { cn } from "@/lib/utils"
 

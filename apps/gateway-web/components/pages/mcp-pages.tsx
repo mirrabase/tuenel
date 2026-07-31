@@ -416,7 +416,7 @@ function JsonResourcePage({
   const [body, setBody] = React.useState(JSON.stringify(initial, null, 2))
   return (
     <>
-      <PageHeader title={title} />
+      <PageHeader title={title} description={description} />
       <Card className="mb-4">
         <CardHeader>
           <CardTitle>Create</CardTitle>
