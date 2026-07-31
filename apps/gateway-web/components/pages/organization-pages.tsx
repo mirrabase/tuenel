@@ -1046,112 +1046,118 @@ export function OrganizationBillingPage() {
           </div>
         </DataState>
       )}
-      <DataState
-        loading={overview.loading}
-        error={overview.error}
-        onRetry={overview.reload}
-      >
-        {!billing?.configured && (
-          <Alert className="mb-4">
-            <AlertTitle>Billing is not configured</AlertTitle>
-            <AlertDescription>
-              Connect a billing system or provision provider-neutral billing
-              records. The complete billing layout remains available below.
-            </AlertDescription>
-          </Alert>
-        )}
-        <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-4">
-          <Metric
-            label="Current plan"
-            value={billing?.plan_name ?? "Not configured"}
-            detail={billing?.billing_cycle ?? "No billing cycle"}
-          />
-          <Metric
-            label="Request allowance"
-            value={Number(billing?.request_allowance ?? 0).toLocaleString()}
-            detail={`${Number(billing?.current_requests ?? 0).toLocaleString()} consumed`}
-          />
-          <Metric
-            label="Token allowance"
-            value={Number(billing?.token_allowance ?? 0).toLocaleString()}
-            detail="Current billing cycle"
-          />
-          <Metric
-            label="Payment status"
-            value={billing?.payment_status ?? "Unavailable"}
-            detail="Provider-neutral state"
-          />
-        </div>
-      </DataState>
-      <Card className="mt-6">
-        <CardHeader>
-          <CardTitle>Invoice history</CardTitle>
-          <CardDescription>
-            Durable invoices associated with this organization.
-          </CardDescription>
-        </CardHeader>
-        <CardContent>
+      {edition !== "managed" && (
+        <>
           <DataState
-            loading={invoices.loading}
-            error={invoices.error}
-            empty={invoices.data?.data.length === 0}
-            onRetry={invoices.reload}
-            emptyTitle="No invoices"
-            emptyDescription="Invoices will appear after billing is configured."
+            loading={overview.loading}
+            error={overview.error}
+            onRetry={overview.reload}
           >
-            <Table>
-              <TableHeader>
-                <TableRow>
-                  <TableHead>Invoice</TableHead>
-                  <TableHead>Period</TableHead>
-                  <TableHead>Amount</TableHead>
-                  <TableHead>Status</TableHead>
-                  <TableHead>Issued</TableHead>
-                  <TableHead />
-                </TableRow>
-              </TableHeader>
-              <TableBody>
-                {invoices.data?.data.map((invoice) => (
-                  <TableRow key={String(invoice.id)}>
-                    <TableCell>
-                      {String(invoice.number ?? invoice.id)}
-                    </TableCell>
-                    <TableCell>
-                      {String(invoice.period_start ?? "—")} –{" "}
-                      {String(invoice.period_end ?? "—")}
-                    </TableCell>
-                    <TableCell>
-                      {String(invoice.currency ?? "USD")}{" "}
-                      {Number(invoice.amount ?? 0).toFixed(2)}
-                    </TableCell>
-                    <TableCell>
-                      <StatusBadge status={String(invoice.status ?? "open")} />
-                    </TableCell>
-                    <TableCell>
-                      {invoice.issued_at
-                        ? new Date(
-                            String(invoice.issued_at)
-                          ).toLocaleDateString()
-                        : "—"}
-                    </TableCell>
-                    <TableCell>
-                      {invoice.url ? (
-                        <Button
-                          variant="ghost"
-                          size="sm"
-                          render={<a href={String(invoice.url)} />}
-                        >
-                          Open
-                        </Button>
-                      ) : null}
-                    </TableCell>
-                  </TableRow>
-                ))}
-              </TableBody>
-            </Table>
+            {!billing?.configured && (
+              <Alert className="mb-4">
+                <AlertTitle>Billing is not configured</AlertTitle>
+                <AlertDescription>
+                  Connect a billing system or provision provider-neutral billing
+                  records. The complete billing layout remains available below.
+                </AlertDescription>
+              </Alert>
+            )}
+            <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-4">
+              <Metric
+                label="Current plan"
+                value={billing?.plan_name ?? "Not configured"}
+                detail={billing?.billing_cycle ?? "No billing cycle"}
+              />
+              <Metric
+                label="Request allowance"
+                value={Number(billing?.request_allowance ?? 0).toLocaleString()}
+                detail={`${Number(billing?.current_requests ?? 0).toLocaleString()} consumed`}
+              />
+              <Metric
+                label="Token allowance"
+                value={Number(billing?.token_allowance ?? 0).toLocaleString()}
+                detail="Current billing cycle"
+              />
+              <Metric
+                label="Payment status"
+                value={billing?.payment_status ?? "Unavailable"}
+                detail="Provider-neutral state"
+              />
+            </div>
           </DataState>
-        </CardContent>
-      </Card>
+          <Card className="mt-6">
+            <CardHeader>
+              <CardTitle>Invoice history</CardTitle>
+              <CardDescription>
+                Durable invoices associated with this organization.
+              </CardDescription>
+            </CardHeader>
+            <CardContent>
+              <DataState
+                loading={invoices.loading}
+                error={invoices.error}
+                empty={invoices.data?.data.length === 0}
+                onRetry={invoices.reload}
+                emptyTitle="No invoices"
+                emptyDescription="Invoices will appear after billing is configured."
+              >
+                <Table>
+                  <TableHeader>
+                    <TableRow>
+                      <TableHead>Invoice</TableHead>
+                      <TableHead>Period</TableHead>
+                      <TableHead>Amount</TableHead>
+                      <TableHead>Status</TableHead>
+                      <TableHead>Issued</TableHead>
+                      <TableHead />
+                    </TableRow>
+                  </TableHeader>
+                  <TableBody>
+                    {invoices.data?.data.map((invoice) => (
+                      <TableRow key={String(invoice.id)}>
+                        <TableCell>
+                          {String(invoice.number ?? invoice.id)}
+                        </TableCell>
+                        <TableCell>
+                          {String(invoice.period_start ?? "—")} –{" "}
+                          {String(invoice.period_end ?? "—")}
+                        </TableCell>
+                        <TableCell>
+                          {String(invoice.currency ?? "USD")}{" "}
+                          {Number(invoice.amount ?? 0).toFixed(2)}
+                        </TableCell>
+                        <TableCell>
+                          <StatusBadge
+                            status={String(invoice.status ?? "open")}
+                          />
+                        </TableCell>
+                        <TableCell>
+                          {invoice.issued_at
+                            ? new Date(
+                                String(invoice.issued_at)
+                              ).toLocaleDateString()
+                            : "—"}
+                        </TableCell>
+                        <TableCell>
+                          {invoice.url ? (
+                            <Button
+                              variant="ghost"
+                              size="sm"
+                              render={<a href={String(invoice.url)} />}
+                            >
+                              Open
+                            </Button>
+                          ) : null}
+                        </TableCell>
+                      </TableRow>
+                    ))}
+                  </TableBody>
+                </Table>
+              </DataState>
+            </CardContent>
+          </Card>
+        </>
+      )}
     </>
   )
 }
