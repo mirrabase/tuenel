@@ -17,8 +17,8 @@ use gateway_providers::{
 use gateway_secrets::{SecretError, SecretMaterialRecord, SecretRepository};
 use gateway_types::{
     ApprovalId, ApprovalRequest, ApprovalResourceType, ApprovalStatus, GatewayMcpTool, IncidentId,
-    IncidentStatus, McpServerId, McpTransportType, Principal, SecretRef, SecurityCategory,
-    SecurityIncident, SecuritySeverity, ToolRiskLevel,
+    IncidentStatus, McpServerId, McpTransportType, Principal, SecretRef, SecurityAction,
+    SecurityCategory, SecurityIncident, SecuritySeverity, ToolRiskLevel,
 };
 use sqlx::Row;
 use uuid::Uuid;
@@ -370,7 +370,7 @@ impl McpRepository for PostgresStore {
         tenant_id: &str,
         server_id: McpServerId,
     ) -> Result<Option<McpServerRecord>, McpError> {
-        sqlx::query("SELECT * FROM mcp_servers WHERE tenant_id=$1 AND server_id=$2")
+        sqlx::query("SELECT m.*,m.enabled AND NOT EXISTS (SELECT 1 FROM plan_resource_suspensions s WHERE s.tenant_id=m.tenant_id AND s.resource_kind='mcp_servers' AND s.resource_id=m.server_id::text AND s.restored_at IS NULL) effective_enabled FROM mcp_servers m WHERE m.tenant_id=$1 AND m.server_id=$2")
             .bind(tenant_id)
             .bind(server_id.0)
             .fetch_optional(&self.pool)
@@ -384,7 +384,7 @@ impl McpRepository for PostgresStore {
         tenant_id: &str,
         project_id: Option<&str>,
     ) -> Result<Vec<McpServerRecord>, McpError> {
-        sqlx::query("SELECT * FROM mcp_servers WHERE tenant_id=$1 AND ($2::text IS NULL OR project_id IS NULL OR project_id=$2) ORDER BY name").bind(tenant_id).bind(project_id).fetch_all(&self.pool).await.map_err(|_| McpError::Unavailable)?.into_iter().map(server_from_row).collect()
+        sqlx::query("SELECT m.*,m.enabled AND NOT EXISTS (SELECT 1 FROM plan_resource_suspensions s WHERE s.tenant_id=m.tenant_id AND s.resource_kind='mcp_servers' AND s.resource_id=m.server_id::text AND s.restored_at IS NULL) effective_enabled FROM mcp_servers m WHERE m.tenant_id=$1 AND ($2::text IS NULL OR m.project_id IS NULL OR m.project_id=$2) ORDER BY m.name").bind(tenant_id).bind(project_id).fetch_all(&self.pool).await.map_err(|_| McpError::Unavailable)?.into_iter().map(server_from_row).collect()
     }
     async fn replace_tools(
         &self,
@@ -448,6 +448,26 @@ impl McpPolicyRepository for PostgresStore {
                 serde_json::from_value(row.try_get("rules").map_err(|_| McpError::Unavailable)?)
                     .map_err(|_| McpError::Invalid)?;
             policy = policy.restrict_with(&next);
+        }
+        let tier = sqlx::query_scalar::<_, String>(
+            "SELECT tier FROM tenant_plan_profiles WHERE tenant_id=$1",
+        )
+        .bind(&principal.tenant_id)
+        .fetch_optional(&self.pool)
+        .await
+        .map_err(|_| McpError::Unavailable)?;
+        if tier.as_deref().is_some_and(|tier| tier != "pro") {
+            for action in policy.tool_actions.values_mut() {
+                if matches!(*action, SecurityAction::RequireApproval) {
+                    *action = SecurityAction::Block;
+                }
+            }
+            if matches!(
+                policy.default_mutating_action,
+                Some(SecurityAction::RequireApproval) | None
+            ) {
+                policy.default_mutating_action = Some(SecurityAction::Block);
+            }
         }
         Ok(policy)
     }
@@ -738,7 +758,9 @@ fn server_from_row(row: sqlx::postgres::PgRow) -> Result<McpServerRecord, McpErr
             .try_get::<Option<String>, _>("credential_ref")
             .map_err(|_| McpError::Unavailable)?
             .map(SecretRef),
-        enabled: row.try_get("enabled").map_err(|_| McpError::Unavailable)?,
+        enabled: row
+            .try_get("effective_enabled")
+            .map_err(|_| McpError::Unavailable)?,
         metadata: serde_json::from_value(
             row.try_get("metadata").map_err(|_| McpError::Unavailable)?,
         )

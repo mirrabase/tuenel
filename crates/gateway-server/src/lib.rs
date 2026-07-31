@@ -518,6 +518,7 @@ async fn create_invitation(
     Json(input): Json<InvitationRequest>,
 ) -> Result<(StatusCode, Json<Value>), ApiError> {
     let credential = tenant_credential(&headers, tenant_id)?;
+    require_plan_capacity(&state, &tenant_id.to_string(), "members").await?;
     let invitation = web_auth(&state)?
         .invite(credential, &input.email, input.role)
         .await
@@ -856,6 +857,7 @@ async fn create_virtual_key(
     Json(input): Json<CreateVirtualKeyRequest>,
 ) -> Result<(StatusCode, Json<CreateVirtualKeyResponse>), ApiError> {
     let principal = write_admin_principal(&state, &headers).await?;
+    require_plan_capacity(&state, &principal.tenant_id, "active_api_keys").await?;
     let display_name = input
         .display_name
         .as_deref()
@@ -999,6 +1001,44 @@ fn bind_project(mut principal: Principal, headers: &HeaderMap) -> Result<Princip
         ));
     }
     Ok(principal)
+}
+
+async fn require_plan_capacity(
+    state: &AppState,
+    tenant_id: &str,
+    resource: &str,
+) -> Result<(), ApiError> {
+    match state.store.plan_resource_usage(tenant_id, resource).await {
+        Ok(Some((current, limit))) if current >= limit => Err(ApiError::new(
+            StatusCode::CONFLICT,
+            "invalid_request_error",
+            "plan_limit_exceeded",
+            &format!("{resource} usage {current} has reached plan limit {limit}; see /billing"),
+        )),
+        Ok(_) => Ok(()),
+        Err(_) => Err(ApiError::service_unavailable(
+            "managed plan enforcement unavailable",
+        )),
+    }
+}
+
+async fn require_plan_feature(
+    state: &AppState,
+    tenant_id: &str,
+    feature: &str,
+) -> Result<(), ApiError> {
+    match state.store.plan_feature_enabled(tenant_id, feature).await {
+        Ok(Some(false)) => Err(ApiError::new(
+            StatusCode::FORBIDDEN,
+            "permission_error",
+            "feature_not_entitled",
+            &format!("{feature} is not included in this plan; see /billing"),
+        )),
+        Ok(_) => Ok(()),
+        Err(_) => Err(ApiError::service_unavailable(
+            "managed plan enforcement unavailable",
+        )),
+    }
 }
 
 fn bearer_credential(headers: &HeaderMap) -> Result<&str, ApiError> {
@@ -1694,6 +1734,15 @@ impl ApiError {
         )
     }
 
+    fn plan_limit(message: &str) -> Self {
+        Self::new(
+            StatusCode::CONFLICT,
+            "invalid_request_error",
+            "plan_limit_exceeded",
+            message,
+        )
+    }
+
     fn not_found(message: &str) -> Self {
         Self::new(
             StatusCode::NOT_FOUND,
@@ -1777,8 +1826,8 @@ impl From<GatewayError> for ApiError {
             GatewayError::Quota(QuotaError::Exceeded) => Self::new(
                 StatusCode::TOO_MANY_REQUESTS,
                 "insufficient_quota",
-                "insufficient_quota",
-                "daily token quota exceeded",
+                "plan_quota_exceeded",
+                "tenant token or request-rate limit exceeded; see /billing",
             ),
             GatewayError::Quota(QuotaError::Unavailable) | GatewayError::Metering => {
                 Self::service_unavailable("gateway accounting unavailable")

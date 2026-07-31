@@ -7,7 +7,7 @@
       "name": "Apache-2.0",
       "identifier": "Apache-2.0"
     },
-    "version": "0.4.2"
+    "version": "0.4.3"
   },
   "paths": {
     "/admin/approvals": {

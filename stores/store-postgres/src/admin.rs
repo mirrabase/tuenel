@@ -39,10 +39,13 @@ impl PostgresStore {
 
     pub async fn runtime_resources(&self) -> Result<Vec<RuntimeResource>, AdminError> {
         sqlx::query(
-            "SELECT kind,id,tenant_id,body FROM admin_resources
-             WHERE kind IN ('providers','model_routes')
-               AND enabled=true AND retired_at IS NULL
-             ORDER BY kind,id",
+            "SELECT r.kind,r.id,r.tenant_id,r.body FROM admin_resources r
+             WHERE r.kind IN ('providers','model_routes')
+               AND r.enabled=true AND r.retired_at IS NULL
+               AND NOT EXISTS (SELECT 1 FROM plan_resource_suspensions s
+                   WHERE s.tenant_id=r.tenant_id AND s.resource_kind=r.kind
+                     AND s.resource_id=r.id AND s.restored_at IS NULL)
+             ORDER BY r.kind,r.id",
         )
         .fetch_all(self.pool())
         .await
@@ -99,7 +102,10 @@ impl AdminRepository for PostgresStore {
         let rows = sqlx::query(
             "SELECT body || jsonb_build_object(
                 'id',id,'tenant_id',tenant_id,'version',version,'enabled',enabled,
-                'retired_at',retired_at,'created_at',created_at,'updated_at',updated_at
+                'retired_at',retired_at,'created_at',created_at,'updated_at',updated_at,
+                'plan_suspended',EXISTS(SELECT 1 FROM plan_resource_suspensions s
+                    WHERE s.tenant_id=admin_resources.tenant_id AND s.resource_kind=admin_resources.kind
+                      AND s.resource_id=admin_resources.id AND s.restored_at IS NULL)
              ) AS resource
              FROM admin_resources
              WHERE kind=$1 AND retired_at IS NULL
@@ -160,6 +166,48 @@ impl AdminRepository for PostgresStore {
             return Err(AdminError::Invalid);
         }
         let mut transaction = self.pool().begin().await.map_err(admin_sqlx)?;
+        if let Some(tenant_id) = tenant_id.as_deref() {
+            let limit_key = match kind {
+                ResourceKind::Projects => Some("projects"),
+                ResourceKind::Providers => Some("providers"),
+                ResourceKind::Policies | ResourceKind::QuotaLimits => Some("budget_rules"),
+                ResourceKind::ModelRoutes
+                    if body
+                        .get("priority")
+                        .and_then(Value::as_u64)
+                        .is_some_and(|value| value > 1) =>
+                {
+                    Some("fallback_targets")
+                }
+                _ => None,
+            };
+            if let Some(limit_key) = limit_key {
+                let limit: Option<i64> = sqlx::query_scalar(
+                    "SELECT (limits->>$2)::BIGINT FROM tenant_plan_profiles WHERE tenant_id=$1 FOR UPDATE",
+                )
+                .bind(tenant_id)
+                .bind(limit_key)
+                .fetch_optional(&mut *transaction)
+                .await
+                .map_err(admin_sqlx)?;
+                if let Some(limit) = limit {
+                    let current: i64 = if kind == ResourceKind::ModelRoutes {
+                        sqlx::query_scalar("SELECT count(*) FROM admin_resources WHERE tenant_id=$1 AND kind='model_routes' AND retired_at IS NULL AND (body->>'priority')::int>1")
+                            .bind(tenant_id).fetch_one(&mut *transaction).await.map_err(admin_sqlx)?
+                    } else if matches!(kind, ResourceKind::Policies | ResourceKind::QuotaLimits) {
+                        sqlx::query_scalar("SELECT count(*) FROM admin_resources WHERE tenant_id=$1 AND kind IN ('policies','quota_limits') AND retired_at IS NULL")
+                            .bind(tenant_id).fetch_one(&mut *transaction).await.map_err(admin_sqlx)?
+                    } else {
+                        sqlx::query_scalar("SELECT count(*) FROM admin_resources WHERE tenant_id=$1 AND kind=$2 AND retired_at IS NULL")
+                            .bind(tenant_id).bind(kind.as_str()).fetch_one(&mut *transaction).await.map_err(admin_sqlx)?
+                    };
+                    if current >= limit {
+                        transaction.rollback().await.map_err(admin_sqlx)?;
+                        return Err(AdminError::PlanLimit);
+                    }
+                }
+            }
+        }
         let resource: Value = sqlx::query_scalar(
             "INSERT INTO admin_resources(kind,id,tenant_id,body,enabled)
              VALUES($1,$2,$3,$4,$5)
@@ -346,7 +394,9 @@ impl AdminRepository for PostgresStore {
                             ELSE NULL END) AS value FROM usage_events u
                      WHERE ($1::text IS NULL OR tenant_id=$1)
                        AND ($3::text IS NULL OR project_id=$3)
-                       AND ($4::timestamptz IS NULL OR occurred_at >= $4::timestamptz)
+                       AND occurred_at >= GREATEST(
+                           COALESCE($4::timestamptz,'-infinity'::timestamptz),
+                           COALESCE(now()-make_interval(days=>(SELECT (limits->>'history_days')::int FROM tenant_plan_profiles WHERE tenant_id=$1)),'-infinity'::timestamptz))
                        AND ($5::timestamptz IS NULL OR occurred_at <= $5::timestamptz)
                      ORDER BY occurred_at DESC,event_id DESC LIMIT $2",
                 )
@@ -383,7 +433,9 @@ impl AdminRepository for PostgresStore {
                      WHERE ($1::text IS NULL OR tenant_id=$1)
                        AND ($3::text IS NULL OR project_id=$3
                             OR payload->>'resource_id'=$3)
-                       AND ($4::timestamptz IS NULL OR occurred_at >= $4::timestamptz)
+                       AND occurred_at >= GREATEST(
+                           COALESCE($4::timestamptz,'-infinity'::timestamptz),
+                           COALESCE(now()-make_interval(days=>(SELECT (limits->>'history_days')::int FROM tenant_plan_profiles WHERE tenant_id=$1)),'-infinity'::timestamptz))
                        AND ($5::timestamptz IS NULL OR occurred_at <= $5::timestamptz)
                      ORDER BY occurred_at DESC,event_id DESC LIMIT $2",
                 )

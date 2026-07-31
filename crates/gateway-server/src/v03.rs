@@ -14,13 +14,17 @@ use gateway_security::{
 };
 use gateway_types::{
     ApprovalId, ApprovalStatus, GatewayMcpInvocation, IncidentId, IncidentStatus, McpPolicyId,
-    McpServerId, McpTransportType, SecurityCategory, SecurityPolicyId, ToolAnnotations,
+    McpServerId, McpTransportType, SecurityAction, SecurityCategory, SecurityPolicyId,
+    ToolAnnotations,
 };
 use serde::Deserialize;
 use serde_json::{Value, json};
 use uuid::Uuid;
 
-use super::{ApiError, AppState, RequestId, admin_principal, authenticate, write_admin_principal};
+use super::{
+    ApiError, AppState, RequestId, admin_principal, authenticate, require_plan_capacity,
+    require_plan_feature, write_admin_principal,
+};
 
 pub(super) fn routes() -> Router<AppState> {
     Router::new()
@@ -113,6 +117,7 @@ async fn create_server(
     Json(input): Json<CreateServer>,
 ) -> Result<(StatusCode, Json<Value>), ApiError> {
     let principal = write_admin_principal(&state, &headers).await?;
+    require_plan_capacity(&state, &principal.tenant_id, "mcp_servers").await?;
     validate_server_input(&input)?;
     let server_id = McpServerId::new();
     let secrets = state
@@ -517,6 +522,9 @@ async fn call_tool(
     Json(input): Json<ToolCall>,
 ) -> Result<Response, ApiError> {
     let principal = authenticate(&state, &headers).await?;
+    if input.approval_id.is_some() {
+        require_plan_feature(&state, &principal.tenant_id, "human_approval").await?;
+    }
     let key = headers
         .get("idempotency-key")
         .and_then(|value| value.to_str().ok())
@@ -543,6 +551,9 @@ async fn create_mcp_policy(
     Json(input): Json<PolicyInput>,
 ) -> Result<(StatusCode, Json<Value>), ApiError> {
     let principal = write_admin_principal(&state, &headers).await?;
+    if mcp_policy_requests_approval(&input.policy) {
+        require_plan_feature(&state, &principal.tenant_id, "human_approval").await?;
+    }
     validate_scope(&input.scope_kind)?;
     let now = Utc::now();
     let record = McpPolicyRecord {
@@ -577,6 +588,9 @@ async fn update_mcp_policy(
     Json(input): Json<PolicyInput>,
 ) -> Result<StatusCode, ApiError> {
     let principal = write_admin_principal(&state, &headers).await?;
+    if mcp_policy_requests_approval(&input.policy) {
+        require_plan_feature(&state, &principal.tenant_id, "human_approval").await?;
+    }
     validate_scope(&input.scope_kind)?;
     let now = Utc::now();
     mcp_admin(&state)?
@@ -622,6 +636,7 @@ async fn approvals(
     Query(query): Query<ListQuery>,
 ) -> Result<Json<Value>, ApiError> {
     let principal = admin_principal(&state, &headers).await?;
+    require_plan_feature(&state, &principal.tenant_id, "human_approval").await?;
     let status = query.status.as_deref().map(parse_approval).transpose()?;
     Ok(Json(
         json!({"data":approvals_service(&state)?.list(&principal.tenant_id,status,query.limit.unwrap_or(100)).await.map_err(|_|ApiError::internal())?}),
@@ -633,6 +648,7 @@ async fn approval(
     headers: HeaderMap,
 ) -> Result<Json<Value>, ApiError> {
     let principal = admin_principal(&state, &headers).await?;
+    require_plan_feature(&state, &principal.tenant_id, "human_approval").await?;
     Ok(Json(json!(
         approvals_service(&state)?
             .get(&principal.tenant_id, ApprovalId(id))
@@ -682,6 +698,7 @@ async fn decide_approval(
     allow: bool,
 ) -> Result<Json<Value>, ApiError> {
     let principal = write_admin_principal(&state, &headers).await?;
+    require_plan_feature(&state, &principal.tenant_id, "human_approval").await?;
     let value = approvals_service(&state)?
         .decide(
             &principal.tenant_id,
@@ -715,6 +732,7 @@ async fn public_approval(
     headers: HeaderMap,
 ) -> Result<Json<Value>, ApiError> {
     let principal = authenticate(&state, &headers).await?;
+    require_plan_feature(&state, &principal.tenant_id, "human_approval").await?;
     let request = approvals_service(&state)?
         .get(&principal.tenant_id, ApprovalId(id))
         .await
@@ -732,6 +750,7 @@ async fn public_approvals(
     Query(query): Query<ListQuery>,
 ) -> Result<Json<Value>, ApiError> {
     let principal = authenticate(&state, &headers).await?;
+    require_plan_feature(&state, &principal.tenant_id, "human_approval").await?;
     let status = query.status.as_deref().map(parse_approval).transpose()?;
     let data = approvals_service(&state)?
         .list(
@@ -761,6 +780,16 @@ async fn create_security_policy(
     Json(input): Json<SecurityPolicyInput>,
 ) -> Result<(StatusCode, Json<Value>), ApiError> {
     let principal = write_admin_principal(&state, &headers).await?;
+    require_plan_feature(&state, &principal.tenant_id, "custom_security_policy").await?;
+    if input.policy.inspect_llm_output || input.policy.create_incidents {
+        require_plan_feature(&state, &principal.tenant_id, "output_inspection").await?;
+    }
+    if input.policy.inspect_mcp_results {
+        require_plan_feature(&state, &principal.tenant_id, "mcp_result_inspection").await?;
+    }
+    if security_policy_requests_approval(&input.policy) {
+        require_plan_feature(&state, &principal.tenant_id, "human_approval").await?;
+    }
     validate_scope(&input.scope_kind)?;
     let now = Utc::now();
     let record = SecurityPolicyRecord {
@@ -796,6 +825,16 @@ async fn update_security_policy(
     Json(input): Json<SecurityPolicyInput>,
 ) -> Result<StatusCode, ApiError> {
     let principal = write_admin_principal(&state, &headers).await?;
+    require_plan_feature(&state, &principal.tenant_id, "custom_security_policy").await?;
+    if input.policy.inspect_llm_output || input.policy.create_incidents {
+        require_plan_feature(&state, &principal.tenant_id, "output_inspection").await?;
+    }
+    if input.policy.inspect_mcp_results {
+        require_plan_feature(&state, &principal.tenant_id, "mcp_result_inspection").await?;
+    }
+    if security_policy_requests_approval(&input.policy) {
+        require_plan_feature(&state, &principal.tenant_id, "human_approval").await?;
+    }
     validate_scope(&input.scope_kind)?;
     let now = Utc::now();
     let record = SecurityPolicyRecord {
@@ -929,6 +968,7 @@ async fn create_security_pattern(
     Json(input): Json<SecurityPatternInput>,
 ) -> Result<(StatusCode, Json<Value>), ApiError> {
     let principal = write_admin_principal(&state, &headers).await?;
+    require_plan_capacity(&state, &principal.tenant_id, "security_patterns").await?;
     validate_custom_pattern(&input.name, &input.pattern)
         .map_err(|_| ApiError::invalid("invalid custom security pattern"))?;
     let now = Utc::now();
@@ -1305,6 +1345,22 @@ fn validate_scope(value: &str) -> Result<(), ApiError> {
     } else {
         Err(ApiError::invalid("invalid policy scope"))
     }
+}
+fn security_policy_requests_approval(policy: &SecurityPolicy) -> bool {
+    policy.actions.values().any(|actions| {
+        actions
+            .values()
+            .any(|action| matches!(action, SecurityAction::RequireApproval))
+    })
+}
+fn mcp_policy_requests_approval(policy: &McpPolicy) -> bool {
+    matches!(
+        policy.default_mutating_action,
+        Some(SecurityAction::RequireApproval)
+    ) || policy
+        .tool_actions
+        .values()
+        .any(|action| matches!(action, SecurityAction::RequireApproval))
 }
 fn parse_approval(value: &str) -> Result<ApprovalStatus, ApiError> {
     match value {

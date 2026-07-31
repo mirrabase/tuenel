@@ -13,6 +13,7 @@ import {
   ClipboardTextIcon,
   CloudIcon,
   CodeIcon,
+  CreditCardIcon,
   CubeIcon,
   GearIcon,
   GitBranchIcon,
@@ -44,6 +45,7 @@ import {
   CommandShortcut,
 } from "@/components/ui/command"
 import { Button } from "@/components/ui/button"
+import { Badge } from "@/components/ui/badge"
 import {
   Sidebar,
   SidebarContent,
@@ -90,6 +92,7 @@ const organizationNavigation: readonly NavGroup[] = [
       { path: "/team", label: "Team", icon: UsersThreeIcon },
       { path: "/providers", label: "Providers", icon: CloudIcon },
       { path: "/usage", label: "Organization Usage", icon: ChartLineUpIcon },
+      { path: "/billing", label: "Billing", icon: CreditCardIcon },
       { path: "/settings", label: "Organization Settings", icon: GearIcon },
     ],
   },
@@ -228,6 +231,26 @@ function NavigationGroups({
   ))
 }
 
+function ManagedPlanBadge({ tenantId }: { tenantId: string }) {
+  const plan = useGatewayData<{
+    tier: "free" | "core" | "pro"
+    usage: { routed_tokens_this_month: number }
+    limits: { routed_tokens_per_month: number }
+  }>(`/commercial/tenants/${tenantId}/billing/status`)
+  if (!plan.data) return null
+  const usage = plan.data.usage.routed_tokens_this_month
+  const limit = plan.data.limits.routed_tokens_per_month
+  return (
+    <Badge
+      variant="secondary"
+      className="capitalize"
+      title={`${usage.toLocaleString()} / ${limit.toLocaleString()} routed tokens this month`}
+    >
+      {plan.data.tier}
+    </Badge>
+  )
+}
+
 export function ConsoleShell({ children }: { children: React.ReactNode }) {
   const pathname = usePathname()
   const router = useRouter()
@@ -329,6 +352,9 @@ export function ConsoleShell({ children }: { children: React.ReactNode }) {
                 </button>
               ))}
             </HeaderMenu>
+            {session.edition === "managed" && (
+              <ManagedPlanBadge tenantId={session.tenantId} />
+            )}
             {inProject && (
               <>
                 <span className="text-xs text-muted-foreground">/</span>

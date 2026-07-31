@@ -24,6 +24,20 @@ pub trait GatewayStore: Send + Sync {
     async fn insert_tenant(&self, tenant: TenantRecord) -> Result<(), StoreError>;
     /// Find a tenant.
     async fn find_tenant(&self, tenant_id: &str) -> Result<Option<TenantRecord>, StoreError>;
+    /// Managed tenant-wide RPM ceiling. Self-hosted tenants return `None`.
+    async fn plan_requests_per_minute(&self, tenant_id: &str) -> Result<Option<u64>, StoreError>;
+    /// Current usage and ceiling for a managed resource, if this tenant is managed.
+    async fn plan_resource_usage(
+        &self,
+        tenant_id: &str,
+        resource: &str,
+    ) -> Result<Option<(u64, u64)>, StoreError>;
+    /// Managed feature decision. Self-hosted tenants return `None`.
+    async fn plan_feature_enabled(
+        &self,
+        tenant_id: &str,
+        feature: &str,
+    ) -> Result<Option<bool>, StoreError>;
     /// Insert prepared Virtual Key metadata and hash.
     async fn insert_virtual_key(&self, key: VirtualKeyRecord) -> Result<(), StoreError>;
     /// Look up a Virtual Key by its non-secret prefix.

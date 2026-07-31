@@ -362,6 +362,9 @@ fn map_admin(error: AdminError) -> ApiError {
         AdminError::Forbidden => ApiError::forbidden("administration operation is not permitted"),
         AdminError::NotFound => ApiError::not_found("administration resource not found"),
         AdminError::Conflict => ApiError::conflict("administration resource version conflict"),
+        AdminError::PlanLimit => {
+            ApiError::plan_limit("managed plan resource limit exceeded; see /billing")
+        }
         AdminError::Unavailable => {
             ApiError::service_unavailable("administration repository unavailable")
         }

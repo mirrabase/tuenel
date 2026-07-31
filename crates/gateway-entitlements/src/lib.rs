@@ -20,6 +20,146 @@ pub enum Edition {
     Managed,
 }
 
+/// Provider-neutral managed product tier. Community and enterprise runtimes may
+/// ignore this profile; managed adapters project their billing provider into it.
+#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ProductTier {
+    Free,
+    Core,
+    Pro,
+}
+
+#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum BillingInterval {
+    Monthly,
+    Annual,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize)]
+pub struct PlanLimits {
+    pub projects: u64,
+    pub members: u64,
+    pub active_api_keys: u64,
+    pub providers: u64,
+    pub routed_tokens_per_month: u64,
+    pub requests_per_minute: u64,
+    pub history_days: u64,
+    pub fallback_targets: u64,
+    pub mcp_servers: u64,
+    pub budget_rules: u64,
+    pub security_patterns: u64,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize)]
+pub struct PlanFeatures {
+    pub audit_export: bool,
+    pub browser_sso: bool,
+    pub output_inspection: bool,
+    pub mcp_argument_inspection: bool,
+    pub mcp_result_inspection: bool,
+    pub custom_security_policy: bool,
+    pub human_approval: bool,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize)]
+pub struct TenantPlanProfile {
+    pub tier: ProductTier,
+    pub interval: Option<BillingInterval>,
+    pub limits: PlanLimits,
+    pub features: PlanFeatures,
+}
+
+impl TenantPlanProfile {
+    pub const fn for_tier(tier: ProductTier, interval: Option<BillingInterval>) -> Self {
+        let (limits, features) = match tier {
+            ProductTier::Free => (
+                PlanLimits {
+                    projects: 1,
+                    members: 1,
+                    active_api_keys: 2,
+                    providers: 1,
+                    routed_tokens_per_month: 100_000,
+                    requests_per_minute: 10,
+                    history_days: 7,
+                    fallback_targets: 0,
+                    mcp_servers: 0,
+                    budget_rules: 0,
+                    security_patterns: 0,
+                },
+                PlanFeatures {
+                    audit_export: false,
+                    browser_sso: false,
+                    output_inspection: false,
+                    mcp_argument_inspection: false,
+                    mcp_result_inspection: false,
+                    custom_security_policy: false,
+                    human_approval: false,
+                },
+            ),
+            ProductTier::Core => (
+                PlanLimits {
+                    projects: 5,
+                    members: 5,
+                    active_api_keys: 20,
+                    providers: 5,
+                    routed_tokens_per_month: 5_000_000,
+                    requests_per_minute: 60,
+                    history_days: 30,
+                    fallback_targets: 2,
+                    mcp_servers: 3,
+                    budget_rules: 10,
+                    security_patterns: 10,
+                },
+                PlanFeatures {
+                    audit_export: true,
+                    browser_sso: false,
+                    output_inspection: false,
+                    mcp_argument_inspection: true,
+                    mcp_result_inspection: false,
+                    custom_security_policy: true,
+                    human_approval: false,
+                },
+            ),
+            ProductTier::Pro => (
+                PlanLimits {
+                    projects: 25,
+                    members: 25,
+                    active_api_keys: 100,
+                    providers: 25,
+                    routed_tokens_per_month: 50_000_000,
+                    requests_per_minute: 300,
+                    history_days: 90,
+                    fallback_targets: 5,
+                    mcp_servers: 25,
+                    budget_rules: 50,
+                    security_patterns: 100,
+                },
+                PlanFeatures {
+                    audit_export: true,
+                    browser_sso: true,
+                    output_inspection: true,
+                    mcp_argument_inspection: true,
+                    mcp_result_inspection: true,
+                    custom_security_policy: true,
+                    human_approval: true,
+                },
+            ),
+        };
+        Self {
+            tier,
+            interval: if matches!(tier, ProductTier::Free) {
+                None
+            } else {
+                interval
+            },
+            limits,
+            features,
+        }
+    }
+}
+
 /// Capabilities that extensions may grant.
 #[derive(Clone, Copy, Debug, Deserialize, Eq, Hash, PartialEq, Serialize)]
 #[serde(rename_all = "snake_case")]
@@ -209,5 +349,19 @@ mod tests {
                 .await,
             Err(EntitlementError::FeatureNotEntitled)
         );
+    }
+
+    #[test]
+    fn managed_plan_profiles_match_the_product_contract() {
+        let free = TenantPlanProfile::for_tier(ProductTier::Free, Some(BillingInterval::Annual));
+        assert_eq!(free.interval, None);
+        assert_eq!(free.limits.routed_tokens_per_month, 100_000);
+        let core = TenantPlanProfile::for_tier(ProductTier::Core, Some(BillingInterval::Monthly));
+        assert_eq!(core.limits.projects, 5);
+        assert!(core.features.audit_export);
+        assert!(!core.features.browser_sso);
+        let pro = TenantPlanProfile::for_tier(ProductTier::Pro, Some(BillingInterval::Annual));
+        assert_eq!(pro.limits.requests_per_minute, 300);
+        assert!(pro.features.human_approval);
     }
 }

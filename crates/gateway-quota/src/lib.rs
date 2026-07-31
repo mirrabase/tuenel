@@ -44,8 +44,13 @@ impl QuotaService {
         prompt_tokens: u64,
         completion_tokens: u64,
     ) -> Result<QuotaReservation, QuotaError> {
+        let plan_rpm = self
+            .store
+            .plan_requests_per_minute(&principal.tenant_id)
+            .await
+            .map_err(|_| QuotaError::Unavailable)?;
         let counter_key = match &self.counter {
-            Some(counter) => Some(counter.reserve(principal).await?),
+            Some(counter) => Some(counter.reserve(principal, plan_rpm).await?),
             None => None,
         };
         let owner = principal
@@ -108,7 +113,11 @@ impl QuotaService {
 
 #[async_trait]
 pub trait InferenceQuotaCounter: Send + Sync {
-    async fn reserve(&self, principal: &Principal) -> Result<String, QuotaError>;
+    async fn reserve(
+        &self,
+        principal: &Principal,
+        plan_requests_per_minute: Option<u64>,
+    ) -> Result<String, QuotaError>;
     async fn release(&self, reservation_key: &str) -> Result<(), QuotaError>;
 }
 
