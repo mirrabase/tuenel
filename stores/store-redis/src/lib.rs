@@ -209,7 +209,7 @@ impl InferenceQuotaCounter for RedisQuotaStore {
             principal.tenant_id, principal.principal_id
         );
         let script = redis::Script::new(
-            r#"local rpm=redis.call('INCR',KEYS[1]);if rpm==1 then redis.call('EXPIRE',KEYS[1],120) end;if rpm>tonumber(ARGV[2]) then redis.call('DECR',KEYS[1]);return 0 end;local active=redis.call('INCR',KEYS[2]);if active==1 then redis.call('EXPIRE',KEYS[2],300) end;if active>tonumber(ARGV[1]) then redis.call('DECR',KEYS[1]);redis.call('DECR',KEYS[2]);return 0 end;return 1"#,
+            r#"local rpm=redis.call('INCR',KEYS[1]);if rpm==1 then redis.call('EXPIRE',KEYS[1],120) end;if tonumber(ARGV[2])>0 and rpm>tonumber(ARGV[2]) then redis.call('DECR',KEYS[1]);return 0 end;local active=redis.call('INCR',KEYS[2]);if active==1 then redis.call('EXPIRE',KEYS[2],300) end;if active>tonumber(ARGV[1]) then redis.call('DECR',KEYS[1]);redis.call('DECR',KEYS[2]);return 0 end;return 1"#,
         );
         let mut connection = self
             .client
@@ -220,7 +220,7 @@ impl InferenceQuotaCounter for RedisQuotaStore {
             .key(&rpm)
             .key(&concurrent)
             .arg(self.default_concurrent)
-            .arg(plan_requests_per_minute.unwrap_or(600))
+            .arg(plan_requests_per_minute.unwrap_or(0))
             .invoke_async(&mut connection)
             .await
             .map_err(|_| QuotaError::Unavailable)?;

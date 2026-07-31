@@ -6,6 +6,7 @@ import { useRouter } from "next/navigation"
 import { WarningCircleIcon } from "@phosphor-icons/react"
 
 import { Alert, AlertDescription } from "@/components/ui/alert"
+import { Brand } from "@/components/brand"
 import { Button } from "@/components/ui/button"
 import {
   Card,
@@ -121,108 +122,111 @@ export function AuthForm({
   }
 
   return (
-    <Card className="w-full max-w-md">
-      <CardHeader>
-        <CardTitle>{mode === "login" ? text.login : text.signup}</CardTitle>
-        <CardDescription>
-          {mode === "login" ? text.loginDescription : text.signupDescription}
-        </CardDescription>
-      </CardHeader>
-      <CardContent>
-        <form onSubmit={submit}>
-          <FieldGroup>
-            {error && (
-              <Alert variant="destructive">
-                <WarningCircleIcon />
-                <AlertDescription>{error}</AlertDescription>
-              </Alert>
-            )}
-            <Field>
-              <FieldLabel htmlFor="email">{text.email}</FieldLabel>
-              <Input
-                id="email"
-                name="email"
-                type="email"
-                autoComplete="email"
-                required
-              />
-            </Field>
-            {mode === "signup" && (
+    <div className="w-full max-w-md">
+      <Brand className="mb-5 lg:hidden" size={40} />
+      <Card>
+        <CardHeader>
+          <CardTitle>{mode === "login" ? text.login : text.signup}</CardTitle>
+          <CardDescription>
+            {mode === "login" ? text.loginDescription : text.signupDescription}
+          </CardDescription>
+        </CardHeader>
+        <CardContent>
+          <form onSubmit={submit}>
+            <FieldGroup>
+              {error && (
+                <Alert variant="destructive">
+                  <WarningCircleIcon />
+                  <AlertDescription>{error}</AlertDescription>
+                </Alert>
+              )}
               <Field>
-                <FieldLabel htmlFor="tenant_name">{text.tenant}</FieldLabel>
+                <FieldLabel htmlFor="email">{text.email}</FieldLabel>
                 <Input
-                  id="tenant_name"
-                  name="tenant_name"
-                  minLength={1}
-                  maxLength={100}
-                  autoComplete="organization"
+                  id="email"
+                  name="email"
+                  type="email"
+                  autoComplete="email"
                   required
                 />
               </Field>
-            )}
-            <Field>
-              <FieldLabel htmlFor="password">{text.password}</FieldLabel>
-              <Input
-                id="password"
-                name="password"
-                type="password"
-                minLength={12}
-                maxLength={128}
-                autoComplete={
-                  mode === "login" ? "current-password" : "new-password"
-                }
-                required
-              />
-            </Field>
-            {verificationSent && (
-              <Alert>
-                <AlertDescription>{text.verificationSent}</AlertDescription>
-              </Alert>
-            )}
-            <Button type="submit" disabled={pending || verificationSent}>
-              {pending && <Spinner data-icon="inline-start" />}
-              {mode === "login" ? text.submitLogin : text.submitSignup}
-            </Button>
-          </FieldGroup>
-        </form>
-        {mode === "login" && allowSso && (
-          <div className="mt-5 space-y-3 border-t pt-5">
-            <Field>
-              <FieldLabel htmlFor="sso-tenant">Organization slug</FieldLabel>
-              <Input
-                id="sso-tenant"
-                value={tenantSlug}
-                onChange={(event) => setTenantSlug(event.target.value)}
-                pattern="[a-z0-9]+(?:-[a-z0-9]+)*"
-                placeholder="acme"
-              />
-            </Field>
+              {mode === "signup" && (
+                <Field>
+                  <FieldLabel htmlFor="tenant_name">{text.tenant}</FieldLabel>
+                  <Input
+                    id="tenant_name"
+                    name="tenant_name"
+                    minLength={1}
+                    maxLength={100}
+                    autoComplete="organization"
+                    required
+                  />
+                </Field>
+              )}
+              <Field>
+                <FieldLabel htmlFor="password">{text.password}</FieldLabel>
+                <Input
+                  id="password"
+                  name="password"
+                  type="password"
+                  minLength={12}
+                  maxLength={128}
+                  autoComplete={
+                    mode === "login" ? "current-password" : "new-password"
+                  }
+                  required
+                />
+              </Field>
+              {verificationSent && (
+                <Alert>
+                  <AlertDescription>{text.verificationSent}</AlertDescription>
+                </Alert>
+              )}
+              <Button type="submit" disabled={pending || verificationSent}>
+                {pending && <Spinner data-icon="inline-start" />}
+                {mode === "login" ? text.submitLogin : text.submitSignup}
+              </Button>
+            </FieldGroup>
+          </form>
+          {mode === "login" && allowSso && (
+            <div className="mt-5 space-y-3 border-t pt-5">
+              <Field>
+                <FieldLabel htmlFor="sso-tenant">Organization slug</FieldLabel>
+                <Input
+                  id="sso-tenant"
+                  value={tenantSlug}
+                  onChange={(event) => setTenantSlug(event.target.value)}
+                  pattern="[a-z0-9]+(?:-[a-z0-9]+)*"
+                  placeholder="acme"
+                />
+              </Field>
+              <Button
+                className="w-full"
+                type="button"
+                variant="outline"
+                disabled={pending || !tenantSlug}
+                onClick={() => void startSso()}
+              >
+                Continue with SSO
+              </Button>
+            </div>
+          )}
+        </CardContent>
+        {(mode === "signup" || allowSignup) && (
+          <CardFooter>
             <Button
-              className="w-full"
-              type="button"
-              variant="outline"
-              disabled={pending || !tenantSlug}
-              onClick={() => void startSso()}
+              variant="link"
+              render={
+                <Link
+                  href={`/${locale}/${mode === "login" ? "register" : "login"}`}
+                />
+              }
             >
-              Continue with SSO
+              {mode === "login" ? text.switchSignup : text.switchLogin}
             </Button>
-          </div>
+          </CardFooter>
         )}
-      </CardContent>
-      {(mode === "signup" || allowSignup) && (
-        <CardFooter>
-          <Button
-            variant="link"
-            render={
-              <Link
-                href={`/${locale}/${mode === "login" ? "register" : "login"}`}
-              />
-            }
-          >
-            {mode === "login" ? text.switchSignup : text.switchLogin}
-          </Button>
-        </CardFooter>
-      )}
-    </Card>
+      </Card>
+    </div>
   )
 }

@@ -39,23 +39,25 @@ pub enum BillingInterval {
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize)]
 pub struct PlanLimits {
-    pub projects: u64,
-    pub members: u64,
-    pub active_api_keys: u64,
-    pub providers: u64,
-    pub routed_tokens_per_month: u64,
-    pub requests_per_minute: u64,
-    pub history_days: u64,
-    pub fallback_targets: u64,
-    pub mcp_servers: u64,
-    pub budget_rules: u64,
-    pub security_patterns: u64,
+    /// `None` is serialized as `null` and means that the plan has no cap.
+    pub projects: Option<u64>,
+    pub members: Option<u64>,
+    pub active_api_keys: Option<u64>,
+    pub providers: Option<u64>,
+    pub routed_tokens_per_month: Option<u64>,
+    pub requests_per_minute: Option<u64>,
+    pub history_days: Option<u64>,
+    pub fallback_targets: Option<u64>,
+    pub mcp_servers: Option<u64>,
+    pub budget_rules: Option<u64>,
+    pub security_patterns: Option<u64>,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize)]
 pub struct PlanFeatures {
     pub audit_export: bool,
     pub browser_sso: bool,
+    pub custom_domain: bool,
     pub output_inspection: bool,
     pub mcp_argument_inspection: bool,
     pub mcp_result_inspection: bool,
@@ -76,21 +78,22 @@ impl TenantPlanProfile {
         let (limits, features) = match tier {
             ProductTier::Free => (
                 PlanLimits {
-                    projects: 1,
-                    members: 1,
-                    active_api_keys: 2,
-                    providers: 1,
-                    routed_tokens_per_month: 100_000,
-                    requests_per_minute: 10,
-                    history_days: 7,
-                    fallback_targets: 0,
-                    mcp_servers: 0,
-                    budget_rules: 0,
-                    security_patterns: 0,
+                    projects: Some(1),
+                    members: Some(1),
+                    active_api_keys: Some(2),
+                    providers: Some(1),
+                    routed_tokens_per_month: Some(100_000),
+                    requests_per_minute: Some(10),
+                    history_days: Some(7),
+                    fallback_targets: Some(0),
+                    mcp_servers: Some(0),
+                    budget_rules: Some(0),
+                    security_patterns: Some(0),
                 },
                 PlanFeatures {
                     audit_export: false,
                     browser_sso: false,
+                    custom_domain: false,
                     output_inspection: false,
                     mcp_argument_inspection: false,
                     mcp_result_inspection: false,
@@ -100,21 +103,22 @@ impl TenantPlanProfile {
             ),
             ProductTier::Core => (
                 PlanLimits {
-                    projects: 5,
-                    members: 5,
-                    active_api_keys: 20,
-                    providers: 5,
-                    routed_tokens_per_month: 5_000_000,
-                    requests_per_minute: 60,
-                    history_days: 30,
-                    fallback_targets: 2,
-                    mcp_servers: 3,
-                    budget_rules: 10,
-                    security_patterns: 10,
+                    projects: Some(5),
+                    members: Some(5),
+                    active_api_keys: None,
+                    providers: Some(5),
+                    routed_tokens_per_month: None,
+                    requests_per_minute: Some(120),
+                    history_days: Some(30),
+                    fallback_targets: Some(3),
+                    mcp_servers: Some(5),
+                    budget_rules: Some(25),
+                    security_patterns: Some(25),
                 },
                 PlanFeatures {
                     audit_export: true,
                     browser_sso: false,
+                    custom_domain: false,
                     output_inspection: false,
                     mcp_argument_inspection: true,
                     mcp_result_inspection: false,
@@ -124,21 +128,22 @@ impl TenantPlanProfile {
             ),
             ProductTier::Pro => (
                 PlanLimits {
-                    projects: 25,
-                    members: 25,
-                    active_api_keys: 100,
-                    providers: 25,
-                    routed_tokens_per_month: 50_000_000,
-                    requests_per_minute: 300,
-                    history_days: 90,
-                    fallback_targets: 5,
-                    mcp_servers: 25,
-                    budget_rules: 50,
-                    security_patterns: 100,
+                    projects: Some(25),
+                    members: Some(25),
+                    active_api_keys: None,
+                    providers: Some(25),
+                    routed_tokens_per_month: None,
+                    requests_per_minute: Some(600),
+                    history_days: Some(365),
+                    fallback_targets: Some(10),
+                    mcp_servers: Some(25),
+                    budget_rules: Some(100),
+                    security_patterns: Some(250),
                 },
                 PlanFeatures {
                     audit_export: true,
                     browser_sso: true,
+                    custom_domain: false,
                     output_inspection: true,
                     mcp_argument_inspection: true,
                     mcp_result_inspection: true,
@@ -355,13 +360,18 @@ mod tests {
     fn managed_plan_profiles_match_the_product_contract() {
         let free = TenantPlanProfile::for_tier(ProductTier::Free, Some(BillingInterval::Annual));
         assert_eq!(free.interval, None);
-        assert_eq!(free.limits.routed_tokens_per_month, 100_000);
+        assert_eq!(free.limits.routed_tokens_per_month, Some(100_000));
         let core = TenantPlanProfile::for_tier(ProductTier::Core, Some(BillingInterval::Monthly));
-        assert_eq!(core.limits.projects, 5);
+        assert_eq!(core.limits.projects, Some(5));
+        assert_eq!(core.limits.active_api_keys, None);
+        assert_eq!(core.limits.routed_tokens_per_month, None);
+        assert_eq!(core.limits.requests_per_minute, Some(120));
         assert!(core.features.audit_export);
         assert!(!core.features.browser_sso);
+        assert!(!core.features.custom_domain);
         let pro = TenantPlanProfile::for_tier(ProductTier::Pro, Some(BillingInterval::Annual));
-        assert_eq!(pro.limits.requests_per_minute, 300);
+        assert_eq!(pro.limits.requests_per_minute, Some(600));
+        assert_eq!(pro.limits.history_days, Some(365));
         assert!(pro.features.human_approval);
     }
 }

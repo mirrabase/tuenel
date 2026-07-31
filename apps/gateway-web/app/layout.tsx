@@ -7,6 +7,7 @@ import { Toaster } from "@/components/ui/sonner"
 export const metadata: Metadata = {
   title: { default: "Tuenel Gateway", template: "%s · Tuenel Gateway" },
   description: "Provider-neutral AI gateway control plane.",
+  icons: { icon: "/logo.svg" },
 }
 
 export const dynamic = "force-dynamic"

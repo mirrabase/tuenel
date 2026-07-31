@@ -2,7 +2,11 @@ import type { Metadata } from "next"
 import { notFound } from "next/navigation"
 
 import { GatewayPage, type PageKind } from "@/components/gateway-page"
-import { getSession, projectBelongsToTenant } from "@/lib/server-auth"
+import {
+  getSession,
+  getTenantCapabilities,
+  projectBelongsToTenant,
+} from "@/lib/server-auth"
 
 const organizationPages: Record<string, PageKind> = {
   "": "projects",
@@ -113,6 +117,11 @@ export default async function ScopedPage({
   const parts = slug ?? []
   const { kind, projectId, route } = resolvePage(parts)
   if (!kind) notFound()
+  if (
+    kind === "organization-billing" &&
+    (await getTenantCapabilities(tenantId))?.edition !== "managed"
+  )
+    notFound()
   if (projectId && !(await projectBelongsToTenant(tenantId, projectId)))
     notFound()
   if (route.startsWith("operator")) {

@@ -182,14 +182,15 @@ impl AdminRepository for PostgresStore {
                 _ => None,
             };
             if let Some(limit_key) = limit_key {
-                let limit: Option<i64> = sqlx::query_scalar(
+                let limit = sqlx::query_scalar::<_, Option<i64>>(
                     "SELECT (limits->>$2)::BIGINT FROM tenant_plan_profiles WHERE tenant_id=$1 FOR UPDATE",
                 )
                 .bind(tenant_id)
                 .bind(limit_key)
                 .fetch_optional(&mut *transaction)
                 .await
-                .map_err(admin_sqlx)?;
+                .map_err(admin_sqlx)?
+                .flatten();
                 if let Some(limit) = limit {
                     let current: i64 = if kind == ResourceKind::ModelRoutes {
                         sqlx::query_scalar("SELECT count(*) FROM admin_resources WHERE tenant_id=$1 AND kind='model_routes' AND retired_at IS NULL AND (body->>'priority')::int>1")

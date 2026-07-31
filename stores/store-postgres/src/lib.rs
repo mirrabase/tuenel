@@ -244,14 +244,15 @@ impl GatewayStore for PostgresStore {
         // A managed plan cap is tenant-wide even when callers spread traffic
         // across many virtual keys. Locking the projection row serializes the
         // usage + pending reservation check.
-        let monthly_plan_limit: Option<i64> = sqlx::query_scalar(
+        let monthly_plan_limit = sqlx::query_scalar::<_, Option<i64>>(
             "SELECT (limits->>'routed_tokens_per_month')::BIGINT FROM tenant_plan_profiles \
              WHERE tenant_id=$1 FOR UPDATE",
         )
         .bind(&reservation.tenant_id)
         .fetch_optional(&mut *transaction)
         .await
-        .map_err(map_sqlx)?;
+        .map_err(map_sqlx)?
+        .flatten();
         if let Some(monthly_plan_limit) = monthly_plan_limit {
             let used: i64 = sqlx::query_scalar(
                 "SELECT COALESCE(SUM(total_tokens),0)::BIGINT FROM usage_events \

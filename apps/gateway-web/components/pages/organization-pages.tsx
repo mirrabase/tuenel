@@ -770,15 +770,17 @@ type ManagedBillingStatus = {
     [key: string]: number
   }
   limits: {
-    routed_tokens_per_month: number
-    projects: number
-    members: number
-    active_api_keys: number
-    providers: number
-    requests_per_minute: number
-    history_days: number
-    fallback_targets: number
-    mcp_servers: number
+    routed_tokens_per_month: number | null
+    projects: number | null
+    members: number | null
+    active_api_keys: number | null
+    providers: number | null
+    requests_per_minute: number | null
+    history_days: number | null
+    fallback_targets: number | null
+    mcp_servers: number | null
+    budget_rules: number | null
+    security_patterns: number | null
   }
   features: Record<string, boolean | string>
   overages: string[]
@@ -796,11 +798,18 @@ type BillingCatalog = {
     interval: "monthly" | "annual"
     price: number
     currency: string
+    coming_soon_features: string[]
     profile: {
       limits: ManagedBillingStatus["limits"]
       features: ManagedBillingStatus["features"]
     }
   }[]
+}
+
+function formatPlanLimit(value: number | null | undefined) {
+  if (value === null) return "Unlimited"
+  if (value === undefined) return "—"
+  return value.toLocaleString()
 }
 
 export function OrganizationBillingPage() {
@@ -821,6 +830,7 @@ export function OrganizationBillingPage() {
     managed.data?.interval ?? "monthly"
   )
   const canManage = gatewayAdmin || ["owner", "admin"].includes(tenantRole)
+  const routedTokenLimit = managed.data?.limits.routed_tokens_per_month
 
   async function openCommercialBilling(
     action: "checkout" | "portal",
@@ -924,20 +934,21 @@ export function OrganizationBillingPage() {
                 {Number(
                   managed.data?.usage.routed_tokens_this_month ?? 0
                 ).toLocaleString()}{" "}
-                of{" "}
-                {Number(
-                  managed.data?.limits.routed_tokens_per_month ?? 0
-                ).toLocaleString()}{" "}
                 routed tokens this month
+                {routedTokenLimit === null
+                  ? " · Unlimited plan"
+                  : ` of ${Number(routedTokenLimit ?? 0).toLocaleString()}`}
               </p>
-              <div className="mt-2 h-2 w-64 max-w-full overflow-hidden rounded-full bg-muted">
-                <div
-                  className="h-full bg-primary"
-                  style={{
-                    width: `${Math.min(100, ((managed.data?.usage.routed_tokens_this_month ?? 0) / Math.max(1, managed.data?.limits.routed_tokens_per_month ?? 1)) * 100)}%`,
-                  }}
-                />
-              </div>
+              {routedTokenLimit !== null && (
+                <div className="mt-2 h-2 w-64 max-w-full overflow-hidden rounded-full bg-muted">
+                  <div
+                    className="h-full bg-primary"
+                    style={{
+                      width: `${Math.min(100, ((managed.data?.usage.routed_tokens_this_month ?? 0) / Math.max(1, routedTokenLimit ?? 1)) * 100)}%`,
+                    }}
+                  />
+                </div>
+              )}
             </div>
             <div className="flex rounded-md border p-1">
               {(["monthly", "annual"] as const).map((value) => (
@@ -996,27 +1007,44 @@ export function OrganizationBillingPage() {
                   <CardContent>
                     <ul className="mb-5 space-y-1 text-sm text-muted-foreground">
                       <li>
-                        {profile?.limits.projects ?? 0} projects ·{" "}
-                        {profile?.limits.members ?? 0} seats
+                        {formatPlanLimit(profile?.limits.projects)} projects ·{" "}
+                        {formatPlanLimit(profile?.limits.members)} seats
                       </li>
                       <li>
-                        {profile?.limits.active_api_keys ?? 0} API keys ·{" "}
-                        {profile?.limits.providers ?? 0} providers
+                        {formatPlanLimit(profile?.limits.active_api_keys)}{" "}
+                        active API key devices / credentials ·{" "}
+                        {formatPlanLimit(profile?.limits.providers)} providers
                       </li>
                       <li>
-                        {Number(
-                          profile?.limits.routed_tokens_per_month ?? 0
-                        ).toLocaleString()}{" "}
-                        tokens / month
+                        {formatPlanLimit(
+                          profile?.limits.routed_tokens_per_month
+                        )}{" "}
+                        routed tokens / month
                       </li>
                       <li>
-                        {profile?.limits.requests_per_minute ?? 0} requests /
-                        minute · {profile?.limits.history_days ?? 0}-day history
+                        {formatPlanLimit(profile?.limits.requests_per_minute)}{" "}
+                        requests / minute ·{" "}
+                        {formatPlanLimit(profile?.limits.history_days)}-day
+                        history
                       </li>
                       <li>
-                        {profile?.limits.mcp_servers ?? 0} MCP servers ·{" "}
-                        {profile?.limits.fallback_targets ?? 0} fallbacks
+                        {formatPlanLimit(profile?.limits.mcp_servers)} MCP
+                        servers ·{" "}
+                        {formatPlanLimit(profile?.limits.fallback_targets)}{" "}
+                        fallbacks
                       </li>
+                      <li>
+                        {formatPlanLimit(profile?.limits.budget_rules)} budget /
+                        quota rules ·{" "}
+                        {formatPlanLimit(profile?.limits.security_patterns)}{" "}
+                        security patterns
+                      </li>
+                      {paid?.coming_soon_features.includes("custom_domain") && (
+                        <li className="flex items-center gap-2">
+                          Custom Domain
+                          <Badge variant="outline">Coming Soon</Badge>
+                        </li>
+                      )}
                     </ul>
                     {selected ? (
                       <Badge variant="secondary">Current plan</Badge>

@@ -30,10 +30,10 @@ import {
   SlidersHorizontalIcon,
   SunIcon,
   TerminalWindowIcon,
-  TreeStructureIcon,
   UsersThreeIcon,
 } from "@phosphor-icons/react"
 
+import { Brand } from "@/components/brand"
 import { useGateway } from "@/components/gateway-provider"
 import {
   Command,
@@ -235,17 +235,17 @@ function ManagedPlanBadge({ tenantId }: { tenantId: string }) {
   const plan = useGatewayData<{
     tier: "free" | "core" | "pro"
     usage: { routed_tokens_this_month: number }
-    limits: { routed_tokens_per_month: number }
+    limits: { routed_tokens_per_month: number | null }
   }>(`/commercial/tenants/${tenantId}/billing/status`)
   if (!plan.data) return null
   const usage = plan.data.usage.routed_tokens_this_month
   const limit = plan.data.limits.routed_tokens_per_month
+  const title =
+    limit === null
+      ? `${usage.toLocaleString()} routed tokens this month · Unlimited plan`
+      : `${usage.toLocaleString()} / ${limit.toLocaleString()} routed tokens this month`
   return (
-    <Badge
-      variant="secondary"
-      className="capitalize"
-      title={`${usage.toLocaleString()} / ${limit.toLocaleString()} routed tokens this month`}
-    >
+    <Badge variant="secondary" className="capitalize" title={title}>
       {plan.data.tier}
     </Badge>
   )
@@ -265,7 +265,14 @@ export function ConsoleShell({ children }: { children: React.ReactNode }) {
     ? `${scope}/project/${session.projectId}`
     : ""
   const inProject = Boolean(session.projectId)
-  const groups = inProject ? projectNavigation : organizationNavigation
+  const groups = inProject
+    ? projectNavigation
+    : organizationNavigation.map((group) => ({
+        ...group,
+        items: group.items.filter(
+          (item) => item.path !== "/billing" || session.edition === "managed"
+        ),
+      }))
   const base = inProject ? projectScope : scope
   const projects = useGatewayData<Page<Project>>(
     `/admin/projects?tenant_id=${encodeURIComponent(session.tenantId)}`
@@ -307,12 +314,12 @@ export function ConsoleShell({ children }: { children: React.ReactNode }) {
                 tooltip="Tuenel"
                 render={<Link href={`${scope}/projects`} />}
               >
-                <span className="flex size-8 items-center justify-center rounded-md bg-primary text-primary-foreground">
-                  <TreeStructureIcon weight="bold" />
-                </span>
-                <span className="font-heading text-sm font-semibold group-data-[collapsible=icon]:hidden">
-                  Tuenel
-                </span>
+                <Brand
+                  size={32}
+                  className="text-sm group-data-[collapsible=icon]:gap-0"
+                  imageClassName="rounded-md"
+                  nameClassName="group-data-[collapsible=icon]:hidden"
+                />
               </SidebarMenuButton>
             </SidebarMenuItem>
           </SidebarMenu>

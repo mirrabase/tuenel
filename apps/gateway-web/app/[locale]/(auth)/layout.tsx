@@ -1,5 +1,7 @@
 import Image from "next/image"
 
+import { Brand } from "@/components/brand"
+
 export default function AuthLayout({
   children,
 }: {
@@ -16,7 +18,7 @@ export default function AuthLayout({
           className="object-cover"
         />
         <div className="absolute inset-x-0 bottom-0 bg-background/80 p-8 backdrop-blur">
-          <p className="font-heading text-2xl font-semibold">Tuenel Gateway</p>
+          <Brand className="text-2xl" size={40} />
           <p className="text-muted-foreground">
             One secure path to every model and tool.
           </p>
