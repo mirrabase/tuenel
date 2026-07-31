@@ -21,7 +21,8 @@ Direct mode needs no domain or public IP and publishes the web console on
 prints a one-time setup link for creating the instance administrator and first
 organization; it never stores the plaintext setup token or account password.
 Then add a provider and model route in the console. OIDC is optional. Use a
-release tag such as `TUENEL_VERSION=v0.4.0` for stable deployments. See the
+published container version such as `TUENEL_VERSION=0.4.1` for stable
+deployments. See the
 [self-hosting guide](docs/self-hosting.md) for TLS, backups, upgrades, OIDC,
 development, and PaaS deployment.
 

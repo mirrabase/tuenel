@@ -266,6 +266,7 @@ function ResourcePage({
     <>
       <PageHeader
         title={title}
+        description={description}
         action={
           mutable &&
           canWrite && (

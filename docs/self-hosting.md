@@ -59,7 +59,7 @@ For an environment-managed default provider, set `UPSTREAM_BASE_URL`,
 `UPSTREAM_MODEL`, and `UPSTREAM_API_KEY` together. OIDC JWT authentication is
 optional; enable it by setting `OIDC_ISSUER`, `OIDC_AUDIENCE`, and
 `OIDC_JWKS_URL` together. Local browser sessions and virtual keys work without
-OIDC. Pin `TUENEL_VERSION=vX.Y.Z` for stable deployments; `edge` follows
+OIDC. Pin `TUENEL_VERSION=X.Y.Z` for stable deployments; `edge` follows
 `main`. No `latest` production tag is published.
 
 Before the first release, the maintainers must make both

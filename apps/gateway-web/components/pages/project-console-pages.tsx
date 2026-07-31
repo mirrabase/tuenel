@@ -244,8 +244,6 @@ function ChartShell({
   )
 }
 
-const breakdownColors = ["#3b82f6", "#60a5fa", "#2563eb", "#93c5fd", "#1d4ed8"]
-
 type BreakdownSection = {
   label: string
   rows?: Row[]

@@ -150,8 +150,13 @@ if grep -R -Eq 'VM_SSH_KEY|VM_HOST|Deploy release to VM' .github/workflows; then
   exit 1
 fi
 grep -q 'value=edge' .github/workflows/release.yml
+grep -q 'type=ref,event=tag' .github/workflows/release.yml
 grep -q 'cosign sign' .github/workflows/release.yml
 grep -q 'sbom: true' .github/workflows/release.yml
 if grep -R -Eq 'value=latest|TUENEL_VERSION:-latest' .github/workflows compose.yaml; then
+  exit 1
+fi
+if grep -R -Eq 'TUENEL_VERSION=v[0-9]|TUENEL_VERSION=vX' README.md docs infra; then
+  echo "deployment documentation must use container versions without a v prefix" >&2
   exit 1
 fi

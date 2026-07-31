@@ -51,9 +51,11 @@ export function StatusBadge({ status }: { status: string }) {
 
 export function PageHeader({
   title,
+  description,
   action,
 }: {
   title: React.ReactNode
+  description?: React.ReactNode
   action?: React.ReactNode
 }) {
   return (
@@ -62,6 +64,9 @@ export function PageHeader({
         <h1 className="font-heading text-2xl font-semibold tracking-tight">
           {title}
         </h1>
+        {description && (
+          <p className="text-sm text-muted-foreground">{description}</p>
+        )}
       </div>
       {action}
     </div>

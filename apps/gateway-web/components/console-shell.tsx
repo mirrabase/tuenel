@@ -30,7 +30,6 @@ import {
   SunIcon,
   TerminalWindowIcon,
   TreeStructureIcon,
-  UserCircleIcon,
   UsersThreeIcon,
 } from "@phosphor-icons/react"
 
@@ -446,6 +445,9 @@ export function ConsoleShell({ children }: { children: React.ReactNode }) {
                     {(session as Record<string, unknown>).avatarUrl ||
                     (session as Record<string, unknown>).avatar ||
                     (session as Record<string, unknown>).image ? (
+                      // Arbitrary identity-provider avatar URLs cannot be
+                      // safely allowlisted for the Next.js image proxy.
+                      // eslint-disable-next-line @next/next/no-img-element
                       <img
                         src={String(
                           (session as Record<string, unknown>).avatarUrl ||
