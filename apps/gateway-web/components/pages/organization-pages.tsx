@@ -753,7 +753,8 @@ type BillingOverview = {
 
 type ManagedBillingStatus = {
   configured: boolean
-  plan?: "monthly" | "annual"
+  tier: "free" | "core" | "pro"
+  interval?: "monthly" | "annual"
   status?:
     | "on_trial"
     | "active"
@@ -764,10 +765,46 @@ type ManagedBillingStatus = {
     | "expired"
   renews_at?: string
   ends_at?: string
+  usage: {
+    routed_tokens_this_month: number
+    [key: string]: number
+  }
+  limits: {
+    routed_tokens_per_month: number
+    projects: number
+    members: number
+    active_api_keys: number
+    providers: number
+    requests_per_minute: number
+    history_days: number
+    fallback_targets: number
+    mcp_servers: number
+  }
+  features: Record<string, boolean | string>
+  overages: string[]
+  allowed_transitions: ("free" | "core" | "pro")[]
+}
+
+type BillingCatalog = {
+  free: {
+    tier: "free"
+    limits: ManagedBillingStatus["limits"]
+    features: ManagedBillingStatus["features"]
+  }
+  plans: {
+    tier: "core" | "pro"
+    interval: "monthly" | "annual"
+    price: number
+    currency: string
+    profile: {
+      limits: ManagedBillingStatus["limits"]
+      features: ManagedBillingStatus["features"]
+    }
+  }[]
 }
 
 export function OrganizationBillingPage() {
-  const { tenantId, edition } = useGateway()
+  const { tenantId, edition, tenantRole, gatewayAdmin } = useGateway()
   const overview = useGatewayData<BillingOverview>(
     `/admin/billing/overview?tenant_id=${tenantId}`
   )
@@ -777,12 +814,17 @@ export function OrganizationBillingPage() {
   const managed = useGatewayData<ManagedBillingStatus>(
     `/commercial/tenants/${tenantId}/billing/status`
   )
+  const catalog = useGatewayData<BillingCatalog>("/commercial/billing/catalog")
   const billing = overview.data
   const [commercialPending, setCommercialPending] = React.useState(false)
+  const [interval, setInterval] = React.useState<"monthly" | "annual">(
+    managed.data?.interval ?? "monthly"
+  )
+  const canManage = gatewayAdmin || ["owner", "admin"].includes(tenantRole)
 
   async function openCommercialBilling(
     action: "checkout" | "portal",
-    plan?: "monthly" | "annual"
+    tier?: "core" | "pro"
   ) {
     setCommercialPending(true)
     try {
@@ -794,7 +836,11 @@ export function OrganizationBillingPage() {
           headers: { "content-type": "application/json" },
           body:
             action === "checkout"
-              ? JSON.stringify({ plan, redirect_url: window.location.href })
+              ? JSON.stringify({
+                  tier,
+                  interval,
+                  redirect_url: window.location.href,
+                })
               : undefined,
         }
       )
@@ -807,13 +853,34 @@ export function OrganizationBillingPage() {
     }
   }
 
+  async function changeCommercialPlan(tier: "core" | "pro") {
+    setCommercialPending(true)
+    try {
+      await gatewayFetch(
+        `/commercial/tenants/${tenantId}/billing/subscription`,
+        tenantId,
+        {
+          method: "PATCH",
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify({ tier, interval }),
+        }
+      )
+      toast.success("Plan change submitted. Billing will update shortly.")
+      managed.reload()
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : "Plan change failed")
+    } finally {
+      setCommercialPending(false)
+    }
+  }
+
   return (
     <>
       <PageHeader
         title="Billing"
         action={
           <div className="flex gap-2">
-            {edition === "managed" && managed.data?.configured && (
+            {edition === "managed" && managed.data?.configured && canManage && (
               <Button
                 disabled={commercialPending}
                 onClick={() => void openCommercialBilling("portal")}
@@ -841,68 +908,137 @@ export function OrganizationBillingPage() {
       />
       {edition === "managed" && (
         <DataState
-          loading={managed.loading}
-          error={managed.error}
-          onRetry={managed.reload}
+          loading={managed.loading || catalog.loading}
+          error={managed.error ?? catalog.error}
+          onRetry={() => {
+            managed.reload()
+            catalog.reload()
+          }}
         >
-          <div className="mb-6 grid gap-4 md:grid-cols-2">
-            {(
-              [
-                {
-                  plan: "monthly",
-                  title: "Monthly",
-                  price: "$29",
-                  detail: "Billed every month",
-                },
-                {
-                  plan: "annual",
-                  title: "Annual",
-                  price: "$299",
-                  detail: "Billed every year",
-                },
-              ] as const
-            ).map((option) => {
-              const selected =
-                managed.data?.configured && managed.data.plan === option.plan
+          <div className="mb-4 flex items-center justify-between gap-4">
+            <div>
+              <Badge variant="secondary" className="capitalize">
+                {managed.data?.tier ?? "free"}
+              </Badge>
+              <p className="mt-2 text-sm text-muted-foreground">
+                {Number(
+                  managed.data?.usage.routed_tokens_this_month ?? 0
+                ).toLocaleString()}{" "}
+                of{" "}
+                {Number(
+                  managed.data?.limits.routed_tokens_per_month ?? 0
+                ).toLocaleString()}{" "}
+                routed tokens this month
+              </p>
+              <div className="mt-2 h-2 w-64 max-w-full overflow-hidden rounded-full bg-muted">
+                <div
+                  className="h-full bg-primary"
+                  style={{
+                    width: `${Math.min(100, ((managed.data?.usage.routed_tokens_this_month ?? 0) / Math.max(1, managed.data?.limits.routed_tokens_per_month ?? 1)) * 100)}%`,
+                  }}
+                />
+              </div>
+            </div>
+            <div className="flex rounded-md border p-1">
+              {(["monthly", "annual"] as const).map((value) => (
+                <Button
+                  key={value}
+                  size="sm"
+                  variant={interval === value ? "secondary" : "ghost"}
+                  onClick={() => setInterval(value)}
+                  className="capitalize"
+                >
+                  {value}
+                </Button>
+              ))}
+            </div>
+          </div>
+          {Boolean(managed.data?.overages.length) && (
+            <Alert className="mb-4">
+              <AlertTitle>Downgrade requires cleanup</AlertTitle>
+              <AlertDescription>
+                Reduce these resources first:{" "}
+                {managed.data?.overages.join(", ")}.
+              </AlertDescription>
+            </Alert>
+          )}
+          <div className="mb-6 grid gap-4 lg:grid-cols-3">
+            {(["free", "core", "pro"] as const).map((tier) => {
+              const paid = catalog.data?.plans.find(
+                (entry) => entry.tier === tier && entry.interval === interval
+              )
+              const profile =
+                tier === "free" ? catalog.data?.free : paid?.profile
+              const selected = managed.data?.tier === tier
+              const price = paid
+                ? new Intl.NumberFormat(undefined, {
+                    style: "currency",
+                    currency: paid.currency,
+                    maximumFractionDigits: 0,
+                  }).format(paid.price / 100)
+                : "$0"
               return (
-                <Card key={option.plan}>
+                <Card
+                  key={tier}
+                  className={selected ? "border-primary" : undefined}
+                >
                   <CardHeader>
-                    <CardTitle>{option.title}</CardTitle>
-                    <CardDescription>{option.detail}</CardDescription>
+                    <CardTitle className="capitalize">{tier}</CardTitle>
+                    <CardDescription>
+                      {price}
+                      {tier === "free"
+                        ? " forever"
+                        : interval === "monthly"
+                          ? " / month"
+                          : " / year"}
+                    </CardDescription>
                   </CardHeader>
-                  <CardContent className="flex items-end justify-between gap-4">
-                    <div>
-                      <div className="font-heading text-3xl font-semibold">
-                        {option.price}
-                      </div>
-                      <div className="mt-1 text-xs text-muted-foreground">
-                        {selected
-                          ? `${managed.data?.status ?? "subscription"}${
-                              managed.data?.renews_at
-                                ? ` · renews ${new Date(
-                                    managed.data.renews_at
-                                  ).toLocaleDateString()}`
-                                : ""
-                            }`
-                          : "Tuenel Managed"}
-                      </div>
-                    </div>
-                    {!managed.data?.configured && (
+                  <CardContent>
+                    <ul className="mb-5 space-y-1 text-sm text-muted-foreground">
+                      <li>
+                        {profile?.limits.projects ?? 0} projects ·{" "}
+                        {profile?.limits.members ?? 0} seats
+                      </li>
+                      <li>
+                        {profile?.limits.active_api_keys ?? 0} API keys ·{" "}
+                        {profile?.limits.providers ?? 0} providers
+                      </li>
+                      <li>
+                        {Number(
+                          profile?.limits.routed_tokens_per_month ?? 0
+                        ).toLocaleString()}{" "}
+                        tokens / month
+                      </li>
+                      <li>
+                        {profile?.limits.requests_per_minute ?? 0} requests /
+                        minute · {profile?.limits.history_days ?? 0}-day history
+                      </li>
+                      <li>
+                        {profile?.limits.mcp_servers ?? 0} MCP servers ·{" "}
+                        {profile?.limits.fallback_targets ?? 0} fallbacks
+                      </li>
+                    </ul>
+                    {selected ? (
+                      <Badge variant="secondary">Current plan</Badge>
+                    ) : tier !== "free" && canManage ? (
                       <Button
-                        variant={
-                          option.plan === "annual" ? "default" : "outline"
-                        }
+                        variant={tier === "pro" ? "default" : "outline"}
                         disabled={commercialPending}
                         onClick={() =>
-                          void openCommercialBilling("checkout", option.plan)
+                          void (managed.data?.configured
+                            ? changeCommercialPlan(tier)
+                            : openCommercialBilling("checkout", tier))
                         }
                       >
-                        Choose {option.title}
+                        {managed.data?.configured
+                          ? `Change to ${tier}`
+                          : `Choose ${tier}`}
                       </Button>
-                    )}
-                    {selected && (
-                      <Badge variant="secondary">Current plan</Badge>
-                    )}
+                    ) : tier !== "free" ? (
+                      <p className="text-xs text-muted-foreground">
+                        An owner or admin can change this plan.
+                      </p>
+                    ) : null}
                   </CardContent>
                 </Card>
               )

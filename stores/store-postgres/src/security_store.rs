@@ -8,6 +8,7 @@ use gateway_types::{
     SecurityFinding, SecurityPolicyId, SecuritySeverity,
 };
 use sqlx::Row;
+use std::collections::HashMap;
 
 use super::PostgresStore;
 
@@ -32,7 +33,15 @@ impl SecurityRepository for PostgresStore {
                 .map_err(|_| SecurityError::InspectionFailed)
             })
             .collect::<Result<Vec<SecurityPolicy>, SecurityError>>()?;
-        Ok(gateway_security::resolve_security_hierarchy(policies))
+        let policy = gateway_security::resolve_security_hierarchy(policies);
+        let tier = sqlx::query_scalar::<_, String>(
+            "SELECT tier FROM tenant_plan_profiles WHERE tenant_id=$1",
+        )
+        .bind(&context.tenant_id)
+        .fetch_optional(&self.pool)
+        .await
+        .map_err(|_| SecurityError::InspectionFailed)?;
+        Ok(apply_managed_plan_security(policy, tier.as_deref()))
     }
     async fn insert_security_policy(
         &self,
@@ -149,7 +158,7 @@ impl SecurityRepository for PostgresStore {
         &self,
         tenant_id: &str,
     ) -> Result<Vec<gateway_security::SecurityCustomPattern>, SecurityError> {
-        sqlx::query("SELECT pattern_id,tenant_id,name,category,pattern,enabled,version,created_at,updated_at FROM security_custom_patterns WHERE tenant_id=$1 ORDER BY name").bind(tenant_id).fetch_all(&self.pool).await.map_err(|_|SecurityError::InspectionFailed)?.into_iter().map(pattern_from_row).collect()
+        sqlx::query("SELECT p.pattern_id,p.tenant_id,p.name,p.category,p.pattern,p.enabled AND NOT EXISTS (SELECT 1 FROM plan_resource_suspensions s WHERE s.tenant_id=p.tenant_id AND s.resource_kind='security_patterns' AND s.resource_id=p.pattern_id::text AND s.restored_at IS NULL) effective_enabled,p.version,p.created_at,p.updated_at FROM security_custom_patterns p WHERE p.tenant_id=$1 ORDER BY p.name").bind(tenant_id).fetch_all(&self.pool).await.map_err(|_|SecurityError::InspectionFailed)?.into_iter().map(pattern_from_row).collect()
     }
     async fn insert_custom_pattern(
         &self,
@@ -188,6 +197,88 @@ impl SecurityRepository for PostgresStore {
     }
 }
 
+fn apply_managed_plan_security(mut policy: SecurityPolicy, tier: Option<&str>) -> SecurityPolicy {
+    match tier {
+        // Free security is deliberately useful but not configurable: inspect
+        // model input and surface every supported finding as a warning.
+        Some("free") => SecurityPolicy {
+            enabled: true,
+            fail_open: true,
+            inspect_llm_input: true,
+            inspect_llm_output: false,
+            inspect_mcp_arguments: false,
+            inspect_mcp_results: false,
+            create_incidents: false,
+            maximum_content_bytes: policy.maximum_content_bytes,
+            actions: fixed_warn_actions(),
+        },
+        Some("core") => {
+            policy.enabled = true;
+            policy.inspect_llm_input = true;
+            policy.inspect_llm_output = false;
+            policy.inspect_mcp_arguments = true;
+            policy.inspect_mcp_results = false;
+            policy.create_incidents = false;
+            for actions in policy.actions.values_mut() {
+                for action in actions.values_mut() {
+                    if matches!(*action, SecurityAction::RequireApproval) {
+                        *action = SecurityAction::Block;
+                    }
+                }
+            }
+            policy
+        }
+        // Pro and installations without a managed profile retain the resolved
+        // policy. The latter keeps self-hosted behavior edition-neutral.
+        Some("pro") | None => policy,
+        Some(_) => SecurityPolicy {
+            enabled: true,
+            fail_open: true,
+            inspect_llm_input: true,
+            inspect_llm_output: false,
+            inspect_mcp_arguments: false,
+            inspect_mcp_results: false,
+            create_incidents: false,
+            maximum_content_bytes: policy.maximum_content_bytes,
+            actions: fixed_warn_actions(),
+        },
+    }
+}
+
+fn fixed_warn_actions() -> HashMap<SecurityCategory, HashMap<SecuritySeverity, SecurityAction>> {
+    const CATEGORIES: [SecurityCategory; 11] = [
+        SecurityCategory::PromptInjection,
+        SecurityCategory::JailbreakAttempt,
+        SecurityCategory::SecretExposure,
+        SecurityCategory::CredentialExposure,
+        SecurityCategory::SensitivePersonalData,
+        SecurityCategory::FinancialData,
+        SecurityCategory::SourceCodeSecret,
+        SecurityCategory::DataExfiltrationAttempt,
+        SecurityCategory::PolicyViolation,
+        SecurityCategory::SuspiciousToolArgument,
+        SecurityCategory::SuspiciousToolResult,
+    ];
+    const SEVERITIES: [SecuritySeverity; 4] = [
+        SecuritySeverity::Low,
+        SecuritySeverity::Medium,
+        SecuritySeverity::High,
+        SecuritySeverity::Critical,
+    ];
+    CATEGORIES
+        .into_iter()
+        .map(|category| {
+            (
+                category,
+                SEVERITIES
+                    .into_iter()
+                    .map(|severity| (severity, SecurityAction::Warn))
+                    .collect(),
+            )
+        })
+        .collect()
+}
+
 fn pattern_from_row(
     row: sqlx::postgres::PgRow,
 ) -> Result<gateway_security::SecurityCustomPattern, SecurityError> {
@@ -209,7 +300,7 @@ fn pattern_from_row(
             .try_get("pattern")
             .map_err(|_| SecurityError::InspectionFailed)?,
         enabled: row
-            .try_get("enabled")
+            .try_get("effective_enabled")
             .map_err(|_| SecurityError::InspectionFailed)?,
         version: row
             .try_get::<i64, _>("version")
@@ -414,5 +505,62 @@ fn parse_category(value: &str) -> SecurityCategory {
         "suspicious_tool_argument" => SecurityCategory::SuspiciousToolArgument,
         "suspicious_tool_result" => SecurityCategory::SuspiciousToolResult,
         _ => SecurityCategory::SecretExposure,
+    }
+}
+
+#[cfg(test)]
+mod managed_plan_tests {
+    use super::*;
+
+    #[test]
+    fn free_is_input_only_and_fixed_warn() {
+        let policy = SecurityPolicy {
+            inspect_llm_output: true,
+            create_incidents: true,
+            ..SecurityPolicy::default()
+        };
+        let result = apply_managed_plan_security(policy, Some("free"));
+        assert!(result.inspect_llm_input);
+        assert!(result.fail_open);
+        assert!(!result.inspect_llm_output);
+        assert!(!result.inspect_mcp_arguments);
+        assert!(!result.create_incidents);
+        assert_eq!(
+            result.action(
+                SecurityCategory::PromptInjection,
+                SecuritySeverity::Critical,
+                SecurityAction::Block
+            ),
+            SecurityAction::Warn
+        );
+    }
+
+    #[test]
+    fn core_disables_pro_stages_and_approval() {
+        let mut policy = SecurityPolicy {
+            inspect_llm_output: true,
+            inspect_mcp_results: true,
+            create_incidents: true,
+            ..SecurityPolicy::default()
+        };
+        policy
+            .actions
+            .entry(SecurityCategory::PolicyViolation)
+            .or_default()
+            .insert(SecuritySeverity::High, SecurityAction::RequireApproval);
+        let result = apply_managed_plan_security(policy, Some("core"));
+        assert!(result.inspect_llm_input);
+        assert!(result.inspect_mcp_arguments);
+        assert!(!result.inspect_llm_output);
+        assert!(!result.inspect_mcp_results);
+        assert!(!result.create_incidents);
+        assert_eq!(
+            result.action(
+                SecurityCategory::PolicyViolation,
+                SecuritySeverity::High,
+                SecurityAction::Warn
+            ),
+            SecurityAction::Block
+        );
     }
 }

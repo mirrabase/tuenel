@@ -24,6 +24,18 @@ test("managed commercial routes allow only their intended methods", () => {
     true
   )
   assert.equal(
+    allowedGatewayRoute(
+      `/commercial/tenants/${tenant}/billing/subscription`,
+      "PATCH",
+      tenant
+    ),
+    true
+  )
+  assert.equal(
+    allowedGatewayRoute("/commercial/billing/catalog", "GET", tenant),
+    true
+  )
+  assert.equal(
     allowedGatewayRoute(`/commercial/tenants/${tenant}/oidc`, "PUT", tenant),
     true
   )

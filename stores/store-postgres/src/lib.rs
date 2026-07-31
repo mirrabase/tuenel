@@ -89,6 +89,83 @@ impl GatewayStore for PostgresStore {
             .transpose()
     }
 
+    async fn plan_requests_per_minute(&self, tenant_id: &str) -> Result<Option<u64>, StoreError> {
+        sqlx::query_scalar::<_, Option<i64>>(
+            "SELECT (limits->>'requests_per_minute')::BIGINT FROM tenant_plan_profiles WHERE tenant_id=$1",
+        )
+        .bind(tenant_id)
+        .fetch_optional(&self.pool)
+        .await
+        .map_err(map_sqlx)?
+        .flatten()
+        .map(from_i64)
+        .transpose()
+    }
+
+    async fn plan_resource_usage(
+        &self,
+        tenant_id: &str,
+        resource: &str,
+    ) -> Result<Option<(u64, u64)>, StoreError> {
+        let count_sql = match resource {
+            "members" => {
+                "SELECT (SELECT count(*) FROM tenant_memberships WHERE tenant_id=$1)+(SELECT count(*) FROM tenant_invitations WHERE tenant_id=$1 AND accepted_at IS NULL AND expires_at>now())"
+            }
+            "active_api_keys" => {
+                "SELECT count(*) FROM virtual_keys WHERE tenant_id=$1 AND revoked_at IS NULL AND (expires_at IS NULL OR expires_at>now())"
+            }
+            "mcp_servers" => "SELECT count(*) FROM mcp_servers WHERE tenant_id=$1 AND enabled",
+            "security_patterns" => {
+                "SELECT count(*) FROM security_custom_patterns WHERE tenant_id=$1 AND enabled"
+            }
+            "fallback_targets" => {
+                "SELECT count(*) FROM model_route_targets t JOIN model_routes r ON r.id=t.route_id WHERE r.tenant_id=$1 AND t.enabled AND t.priority>1"
+            }
+            _ => return Err(StoreError::Unavailable),
+        };
+        let limit: Option<i64> = sqlx::query_scalar::<_, Option<i64>>(
+            "SELECT (limits->>$2)::BIGINT FROM tenant_plan_profiles WHERE tenant_id=$1",
+        )
+        .bind(tenant_id)
+        .bind(resource)
+        .fetch_optional(&self.pool)
+        .await
+        .map_err(map_sqlx)?
+        .flatten();
+        let Some(limit) = limit else {
+            return Ok(None);
+        };
+        let current: i64 = sqlx::query_scalar(count_sql)
+            .bind(tenant_id)
+            .fetch_one(&self.pool)
+            .await
+            .map_err(map_sqlx)?;
+        Ok(Some((from_i64(current)?, from_i64(limit)?)))
+    }
+
+    async fn plan_feature_enabled(
+        &self,
+        tenant_id: &str,
+        feature: &str,
+    ) -> Result<Option<bool>, StoreError> {
+        match feature {
+            "custom_security_policy"
+            | "output_inspection"
+            | "mcp_result_inspection"
+            | "human_approval" => {}
+            _ => return Err(StoreError::Unavailable),
+        }
+        sqlx::query_scalar::<_, Option<bool>>(
+            "SELECT (features->>$2)::boolean FROM tenant_plan_profiles WHERE tenant_id=$1",
+        )
+        .bind(tenant_id)
+        .bind(feature)
+        .fetch_optional(&self.pool)
+        .await
+        .map_err(map_sqlx)
+        .map(Option::flatten)
+    }
+
     async fn insert_virtual_key(&self, key: VirtualKeyRecord) -> Result<(), StoreError> {
         sqlx::query(
             "INSERT INTO virtual_keys \
@@ -122,7 +199,10 @@ impl GatewayStore for PostgresStore {
         let row = sqlx::query(
             "SELECT id, display_name, lookup_prefix, secret_hash, tenant_id, project_id, user_id, scopes, \
              expires_at, revoked_at, daily_token_limit, allowed_models, daily_request_limit, monthly_budget \
-             FROM virtual_keys WHERE lookup_prefix = $1",
+             FROM virtual_keys v WHERE lookup_prefix = $1 \
+             AND NOT EXISTS (SELECT 1 FROM plan_resource_suspensions s \
+                 WHERE s.tenant_id=v.tenant_id AND s.resource_kind='active_api_keys' \
+                   AND s.resource_id=v.id::text AND s.restored_at IS NULL)",
         )
         .bind(prefix)
         .fetch_optional(&self.pool)
@@ -161,6 +241,40 @@ impl GatewayStore for PostgresStore {
 
     async fn reserve_quota(&self, reservation: QuotaReservation) -> Result<bool, StoreError> {
         let mut transaction = self.pool.begin().await.map_err(map_sqlx)?;
+        // A managed plan cap is tenant-wide even when callers spread traffic
+        // across many virtual keys. Locking the projection row serializes the
+        // usage + pending reservation check.
+        let monthly_plan_limit: Option<i64> = sqlx::query_scalar(
+            "SELECT (limits->>'routed_tokens_per_month')::BIGINT FROM tenant_plan_profiles \
+             WHERE tenant_id=$1 FOR UPDATE",
+        )
+        .bind(&reservation.tenant_id)
+        .fetch_optional(&mut *transaction)
+        .await
+        .map_err(map_sqlx)?;
+        if let Some(monthly_plan_limit) = monthly_plan_limit {
+            let used: i64 = sqlx::query_scalar(
+                "SELECT COALESCE(SUM(total_tokens),0)::BIGINT FROM usage_events \
+                 WHERE tenant_id=$1 AND occurred_at>=date_trunc('month',now())",
+            )
+            .bind(&reservation.tenant_id)
+            .fetch_one(&mut *transaction)
+            .await
+            .map_err(map_sqlx)?;
+            let pending: i64 = sqlx::query_scalar(
+                "SELECT COALESCE(SUM(prompt_tokens+completion_tokens),0)::BIGINT \
+                 FROM quota_reservations WHERE tenant_id=$1",
+            )
+            .bind(&reservation.tenant_id)
+            .fetch_one(&mut *transaction)
+            .await
+            .map_err(map_sqlx)?;
+            let requested = to_i64(reservation.reserved_tokens())?;
+            if used.saturating_add(pending).saturating_add(requested) > monthly_plan_limit {
+                transaction.rollback().await.map_err(map_sqlx)?;
+                return Ok(false);
+            }
+        }
         let limit: i64 = match &reservation.owner {
             QuotaOwner::Tenant(id) => sqlx::query_scalar(
                 "SELECT daily_token_limit FROM tenants WHERE id = $1 FOR UPDATE",

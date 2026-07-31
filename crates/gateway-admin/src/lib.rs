@@ -593,6 +593,8 @@ pub enum AdminError {
     NotFound,
     #[error("administration resource version conflict")]
     Conflict,
+    #[error("managed plan resource limit exceeded")]
+    PlanLimit,
     #[error("administration repository unavailable")]
     Unavailable,
 }

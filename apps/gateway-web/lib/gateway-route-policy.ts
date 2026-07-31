@@ -13,12 +13,13 @@ const rules: [RegExp, ReadonlySet<string>][] = [
 ]
 
 const commercialTenantRoute =
-  /^\/commercial\/tenants\/([0-9a-f-]{36})\/(billing\/(?:checkout|portal|status)|oidc|audit\/export)$/i
+  /^\/commercial\/tenants\/([0-9a-f-]{36})\/(billing\/(?:checkout|portal|status|subscription)|oidc|audit\/export)$/i
 
 const commercialMethods: Record<string, ReadonlySet<string>> = {
   "billing/checkout": new Set(["POST"]),
   "billing/portal": new Set(["POST"]),
   "billing/status": new Set(["GET"]),
+  "billing/subscription": new Set(["PATCH"]),
   oidc: new Set(["GET", "PUT"]),
   "audit/export": new Set(["GET"]),
 }
@@ -28,6 +29,7 @@ export function allowedGatewayRoute(
   method: string,
   scopedTenant: string
 ) {
+  if (path === "/commercial/billing/catalog" && method === "GET") return true
   const commercial = commercialTenantRoute.exec(path)
   if (commercial) {
     const [, pathTenant, route] = commercial

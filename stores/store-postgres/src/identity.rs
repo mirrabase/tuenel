@@ -234,7 +234,7 @@ impl IdentityRepository for PostgresStore {
     }
 
     async fn memberships(&self, user_id: Uuid) -> Result<Vec<Membership>, WebAuthError> {
-        sqlx::query("SELECT t.id,t.name,m.role FROM tenant_memberships m JOIN tenants t ON t.id=m.tenant_id WHERE m.user_id=$1 ORDER BY t.created_at,t.id")
+        sqlx::query("SELECT t.id,t.name,m.role FROM tenant_memberships m JOIN tenants t ON t.id=m.tenant_id WHERE m.user_id=$1 AND NOT EXISTS (SELECT 1 FROM plan_resource_suspensions s WHERE s.tenant_id=m.tenant_id AND s.resource_kind='members' AND s.resource_id=m.user_id::text AND s.restored_at IS NULL) ORDER BY t.created_at,t.id")
             .bind(user_id).fetch_all(&self.pool).await.map_err(map_error)?
             .into_iter().map(|row| {
                 let id: String = row.try_get("id").map_err(|_| WebAuthError::Unavailable)?;
@@ -252,7 +252,7 @@ impl IdentityRepository for PostgresStore {
         tenant_id: Uuid,
         now: DateTime<Utc>,
     ) -> Result<Option<(WebUser, TenantRole)>, WebAuthError> {
-        sqlx::query("SELECT u.id,u.email,u.password_hash,u.gateway_admin,m.role FROM web_sessions s JOIN users u ON u.id=s.user_id JOIN tenant_memberships m ON m.user_id=u.id AND m.tenant_id=$2 WHERE s.token_hash=$1 AND s.revoked_at IS NULL AND s.expires_at>$3")
+        sqlx::query("SELECT u.id,u.email,u.password_hash,u.gateway_admin,m.role FROM web_sessions s JOIN users u ON u.id=s.user_id JOIN tenant_memberships m ON m.user_id=u.id AND m.tenant_id=$2 WHERE s.token_hash=$1 AND s.revoked_at IS NULL AND s.expires_at>$3 AND NOT EXISTS (SELECT 1 FROM plan_resource_suspensions p WHERE p.tenant_id=m.tenant_id AND p.resource_kind='members' AND p.resource_id=m.user_id::text AND p.restored_at IS NULL)")
             .bind(session_hash).bind(tenant_id.to_string()).bind(now)
             .fetch_optional(&self.pool).await.map_err(map_error)?
             .map(|row| {

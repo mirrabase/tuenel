@@ -49,6 +49,26 @@ impl GatewayStore for MemoryStore {
         Ok(self.state.lock().await.tenants.get(tenant_id).cloned())
     }
 
+    async fn plan_requests_per_minute(&self, _tenant_id: &str) -> Result<Option<u64>, StoreError> {
+        Ok(None)
+    }
+
+    async fn plan_resource_usage(
+        &self,
+        _tenant_id: &str,
+        _resource: &str,
+    ) -> Result<Option<(u64, u64)>, StoreError> {
+        Ok(None)
+    }
+
+    async fn plan_feature_enabled(
+        &self,
+        _tenant_id: &str,
+        _feature: &str,
+    ) -> Result<Option<bool>, StoreError> {
+        Ok(None)
+    }
+
     async fn insert_virtual_key(&self, key: VirtualKeyRecord) -> Result<(), StoreError> {
         let mut state = self.state.lock().await;
         if state.keys.contains_key(&key.lookup_prefix) {
