@@ -15,6 +15,7 @@ import {
   useGatewayData,
 } from "@/components/pages/shared"
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert"
+import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
 import {
   Card,
@@ -750,6 +751,21 @@ type BillingOverview = {
   manage_url?: string
 }
 
+type ManagedBillingStatus = {
+  configured: boolean
+  plan?: "monthly" | "annual"
+  status?:
+    | "on_trial"
+    | "active"
+    | "paused"
+    | "past_due"
+    | "unpaid"
+    | "cancelled"
+    | "expired"
+  renews_at?: string
+  ends_at?: string
+}
+
 export function OrganizationBillingPage() {
   const { tenantId, edition } = useGateway()
   const overview = useGatewayData<BillingOverview>(
@@ -758,10 +774,16 @@ export function OrganizationBillingPage() {
   const invoices = useGatewayData<Page<JsonRecord>>(
     `/admin/billing/invoices?tenant_id=${tenantId}`
   )
+  const managed = useGatewayData<ManagedBillingStatus>(
+    `/commercial/tenants/${tenantId}/billing/status`
+  )
   const billing = overview.data
   const [commercialPending, setCommercialPending] = React.useState(false)
 
-  async function openCommercialBilling(action: "checkout" | "portal") {
+  async function openCommercialBilling(
+    action: "checkout" | "portal",
+    plan?: "monthly" | "annual"
+  ) {
     setCommercialPending(true)
     try {
       const result = await gatewayFetch<{ url: string }>(
@@ -772,7 +794,7 @@ export function OrganizationBillingPage() {
           headers: { "content-type": "application/json" },
           body:
             action === "checkout"
-              ? JSON.stringify({ redirect_url: window.location.href })
+              ? JSON.stringify({ plan, redirect_url: window.location.href })
               : undefined,
         }
       )
@@ -791,22 +813,13 @@ export function OrganizationBillingPage() {
         title="Billing"
         action={
           <div className="flex gap-2">
-            {edition === "managed" && (
-              <>
-                <Button
-                  variant="outline"
-                  disabled={commercialPending}
-                  onClick={() => void openCommercialBilling("checkout")}
-                >
-                  Upgrade plan
-                </Button>
-                <Button
-                  disabled={commercialPending}
-                  onClick={() => void openCommercialBilling("portal")}
-                >
-                  Customer portal
-                </Button>
-              </>
+            {edition === "managed" && managed.data?.configured && (
+              <Button
+                disabled={commercialPending}
+                onClick={() => void openCommercialBilling("portal")}
+              >
+                Customer portal
+              </Button>
             )}
             {billing?.upgrade_url && (
               <Button
@@ -826,6 +839,77 @@ export function OrganizationBillingPage() {
           </div>
         }
       />
+      {edition === "managed" && (
+        <DataState
+          loading={managed.loading}
+          error={managed.error}
+          onRetry={managed.reload}
+        >
+          <div className="mb-6 grid gap-4 md:grid-cols-2">
+            {(
+              [
+                {
+                  plan: "monthly",
+                  title: "Monthly",
+                  price: "$29",
+                  detail: "Billed every month",
+                },
+                {
+                  plan: "annual",
+                  title: "Annual",
+                  price: "$299",
+                  detail: "Billed every year",
+                },
+              ] as const
+            ).map((option) => {
+              const selected =
+                managed.data?.configured && managed.data.plan === option.plan
+              return (
+                <Card key={option.plan}>
+                  <CardHeader>
+                    <CardTitle>{option.title}</CardTitle>
+                    <CardDescription>{option.detail}</CardDescription>
+                  </CardHeader>
+                  <CardContent className="flex items-end justify-between gap-4">
+                    <div>
+                      <div className="font-heading text-3xl font-semibold">
+                        {option.price}
+                      </div>
+                      <div className="mt-1 text-xs text-muted-foreground">
+                        {selected
+                          ? `${managed.data?.status ?? "subscription"}${
+                              managed.data?.renews_at
+                                ? ` · renews ${new Date(
+                                    managed.data.renews_at
+                                  ).toLocaleDateString()}`
+                                : ""
+                            }`
+                          : "Tuenel Managed"}
+                      </div>
+                    </div>
+                    {!managed.data?.configured && (
+                      <Button
+                        variant={
+                          option.plan === "annual" ? "default" : "outline"
+                        }
+                        disabled={commercialPending}
+                        onClick={() =>
+                          void openCommercialBilling("checkout", option.plan)
+                        }
+                      >
+                        Choose {option.title}
+                      </Button>
+                    )}
+                    {selected && (
+                      <Badge variant="secondary">Current plan</Badge>
+                    )}
+                  </CardContent>
+                </Card>
+              )
+            })}
+          </div>
+        </DataState>
+      )}
       <DataState
         loading={overview.loading}
         error={overview.error}
