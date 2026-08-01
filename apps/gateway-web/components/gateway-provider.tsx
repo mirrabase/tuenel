@@ -11,6 +11,7 @@ export type GatewaySession = {
   tenantRole: "owner" | "admin" | "engineer" | "viewer"
   gatewayAdmin: boolean
   gatewayEndpoint: string
+  projectDomain: string
   edition: "community" | "enterprise" | "managed"
   capabilities: {
     browserSso: boolean

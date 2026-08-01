@@ -1051,9 +1051,24 @@ fn project_endpoint(headers: &HeaderMap) -> Option<String> {
         .next()?
         .to_ascii_lowercase();
     let label = host.strip_suffix(".mirrabase.com")?;
-    (label.len() == 33
-        && label.starts_with('p')
-        && label[1..].bytes().all(|byte| byte.is_ascii_hexdigit()))
+    let (slug, suffix) = label.rsplit_once('-')?;
+    (label.len() <= 63
+        && !slug.is_empty()
+        && slug
+            .bytes()
+            .all(|byte| byte.is_ascii_lowercase() || byte.is_ascii_digit() || byte == b'-')
+        && slug
+            .as_bytes()
+            .first()
+            .is_some_and(u8::is_ascii_alphanumeric)
+        && slug
+            .as_bytes()
+            .last()
+            .is_some_and(u8::is_ascii_alphanumeric)
+        && suffix.len() == 4
+        && suffix
+            .bytes()
+            .all(|byte| byte.is_ascii_lowercase() || byte.is_ascii_digit()))
     .then_some(label.to_owned())
 }
 
@@ -1304,6 +1319,7 @@ impl ResponsesRequest {
                 temperature: self.temperature,
                 top_p: self.top_p,
                 max_output_tokens: output_tokens,
+                max_output_tokens_explicit: self.max_output_tokens.is_some(),
                 stop: Vec::new(),
             },
             stream: self.stream,
@@ -1495,6 +1511,8 @@ impl ChatCompletionRequest {
         if self.max_tokens.is_some() && self.max_completion_tokens.is_some() {
             return Err(ApiError::invalid("set only one output-token limit"));
         }
+        let max_output_tokens_explicit =
+            self.max_completion_tokens.is_some() || self.max_tokens.is_some();
         let output_tokens = self
             .max_completion_tokens
             .or(self.max_tokens)
@@ -1525,6 +1543,7 @@ impl ChatCompletionRequest {
                 temperature: self.temperature,
                 top_p: self.top_p,
                 max_output_tokens: output_tokens,
+                max_output_tokens_explicit,
                 stop: self.stop.map(StopInput::into_vec).unwrap_or_default(),
             },
         })
@@ -2023,24 +2042,14 @@ mod tests {
     #[test]
     fn recognizes_only_canonical_project_endpoint_hosts() {
         let mut headers = HeaderMap::new();
-        headers.insert(
-            "host",
-            "p0123456789abcdef0123456789abcdef.mirrabase.com:443"
-                .parse()
-                .unwrap(),
-        );
+        headers.insert("host", "my-project-k9x2.mirrabase.com:443".parse().unwrap());
         assert_eq!(
             project_endpoint(&headers).as_deref(),
-            Some("p0123456789abcdef0123456789abcdef")
+            Some("my-project-k9x2")
         );
         headers.insert("host", "random.mirrabase.com".parse().unwrap());
         assert_eq!(project_endpoint(&headers), None);
-        headers.insert(
-            "host",
-            "p0123456789abcdef0123456789abcdeg.mirrabase.com"
-                .parse()
-                .unwrap(),
-        );
+        headers.insert("host", "project-abc!.mirrabase.com".parse().unwrap());
         assert_eq!(project_endpoint(&headers), None);
     }
 }

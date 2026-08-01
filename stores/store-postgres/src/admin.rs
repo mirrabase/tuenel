@@ -9,6 +9,41 @@ use uuid::Uuid;
 
 use crate::PostgresStore;
 
+fn project_endpoint_id(name: &str) -> String {
+    let mut slug = String::with_capacity(name.len().min(58));
+    let mut separator = false;
+    for character in name.chars() {
+        if character.is_ascii_alphanumeric() {
+            if separator && !slug.is_empty() && slug.len() < 58 {
+                slug.push('-');
+            }
+            separator = false;
+            if slug.len() < 58 {
+                slug.push(character.to_ascii_lowercase());
+            }
+        } else {
+            separator = true;
+        }
+    }
+    while slug.ends_with('-') {
+        slug.pop();
+    }
+    if slug.is_empty() {
+        slug.push_str("project");
+    }
+    let alphabet = b"0123456789abcdefghijklmnopqrstuvwxyz";
+    let mut value = Uuid::new_v4().as_u128() as u32 % 36_u32.pow(4);
+    let mut suffix = [b'0'; 4];
+    for index in (0..4).rev() {
+        suffix[index] = alphabet[(value % 36) as usize];
+        value /= 36;
+    }
+    format!(
+        "{slug}-{}",
+        std::str::from_utf8(&suffix).expect("ASCII suffix")
+    )
+}
+
 #[derive(Clone, Debug)]
 pub struct RuntimeResource {
     pub kind: String,
@@ -206,9 +241,13 @@ impl AdminRepository for PostgresStore {
                     .flatten()
             });
         if kind == ResourceKind::Projects && !object.contains_key("endpoint_id") {
+            let name = object
+                .get("name")
+                .and_then(Value::as_str)
+                .unwrap_or("project");
             object.insert(
                 "endpoint_id".to_owned(),
-                Value::String(format!("p{}", Uuid::new_v4().simple())),
+                Value::String(project_endpoint_id(name)),
             );
         }
         if id.trim().is_empty() || tenant_id.as_deref().is_some_and(str::is_empty) {
@@ -1187,5 +1226,23 @@ fn admin_sqlx(error: sqlx::Error) -> AdminError {
         AdminError::Conflict
     } else {
         AdminError::Unavailable
+    }
+}
+
+#[cfg(test)]
+mod endpoint_tests {
+    use super::project_endpoint_id;
+
+    #[test]
+    fn uses_dns_safe_project_name_and_four_character_suffix() {
+        let endpoint = project_endpoint_id("My First_Project!");
+        assert!(endpoint.starts_with("my-first-project-"));
+        assert_eq!(endpoint.rsplit_once('-').unwrap().1.len(), 4);
+        assert!(endpoint.len() <= 63);
+    }
+
+    #[test]
+    fn falls_back_when_name_has_no_ascii_label_characters() {
+        assert!(project_endpoint_id("東京").starts_with("project-"));
     }
 }
