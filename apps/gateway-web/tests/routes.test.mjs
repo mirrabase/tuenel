@@ -516,6 +516,8 @@ test("managed billing renders unlimited values and roadmap features truthfully",
   assert.match(billing, /standard\s+proration/)
   assert.match(billing, /setPlanConfirmation\(tier\)/)
   assert.match(shell, /Unlimited plan/)
+  assert.match(billing, /Lifetime plan/)
+  assert.match(billing, /permanent access and is not billed/)
 })
 
 test("providers discover upstream models before routes and expose explicit pricing", () => {
@@ -530,6 +532,8 @@ test("providers discover upstream models before routes and expose explicit prici
   assert.match(providers, /provider\.id\)\}\/models/)
   assert.match(providers, /Unpriced/)
   assert.match(providers, /Set price/)
+  assert.match(providers, /Embedding cost \/ 1M tokens/)
+  assert.match(providers, /does not change Lemon Squeezy plan/)
   assert.match(providers, /input_cost_per_million/)
   assert.match(organization, /available_models/)
   assert.match(
