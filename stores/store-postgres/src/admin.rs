@@ -269,7 +269,9 @@ impl AdminRepository for PostgresStore {
             };
             if let Some(limit_key) = limit_key {
                 let limit = sqlx::query_scalar::<_, Option<i64>>(
-                    "SELECT (limits->>$2)::BIGINT FROM tenant_plan_profiles WHERE tenant_id=$1 FOR UPDATE",
+                    "SELECT CASE WHEN valid_until IS NOT NULL AND valid_until<=now() THEN \
+                     ('{\"projects\":1,\"providers\":1,\"budget_rules\":0}'::jsonb->>$2)::BIGINT \
+                     ELSE (limits->>$2)::BIGINT END FROM tenant_plan_profiles WHERE tenant_id=$1 FOR UPDATE",
                 )
                 .bind(tenant_id)
                 .bind(limit_key)
@@ -503,7 +505,7 @@ impl AdminRepository for PostgresStore {
                        AND ($3::text IS NULL OR project_id=$3)
                        AND occurred_at >= GREATEST(
                            COALESCE($4::timestamptz,'-infinity'::timestamptz),
-                           COALESCE(now()-make_interval(days=>(SELECT (limits->>'history_days')::int FROM tenant_plan_profiles WHERE tenant_id=$1)),'-infinity'::timestamptz))
+                           COALESCE(now()-make_interval(days=>(SELECT CASE WHEN valid_until IS NOT NULL AND valid_until<=now() THEN 7 ELSE (limits->>'history_days')::int END FROM tenant_plan_profiles WHERE tenant_id=$1)),'-infinity'::timestamptz))
                        AND ($5::timestamptz IS NULL OR occurred_at <= $5::timestamptz)
                      ORDER BY occurred_at DESC,event_id DESC LIMIT $2",
                 )
@@ -542,7 +544,7 @@ impl AdminRepository for PostgresStore {
                             OR payload->>'resource_id'=$3)
                        AND occurred_at >= GREATEST(
                            COALESCE($4::timestamptz,'-infinity'::timestamptz),
-                           COALESCE(now()-make_interval(days=>(SELECT (limits->>'history_days')::int FROM tenant_plan_profiles WHERE tenant_id=$1)),'-infinity'::timestamptz))
+                           COALESCE(now()-make_interval(days=>(SELECT CASE WHEN valid_until IS NOT NULL AND valid_until<=now() THEN 7 ELSE (limits->>'history_days')::int END FROM tenant_plan_profiles WHERE tenant_id=$1)),'-infinity'::timestamptz))
                        AND ($5::timestamptz IS NULL OR occurred_at <= $5::timestamptz)
                      ORDER BY occurred_at DESC,event_id DESC LIMIT $2",
                 )
@@ -1121,7 +1123,7 @@ async fn enforce_fallback_limit(
         return Ok(());
     };
     let limit = sqlx::query_scalar::<_, Option<i64>>(
-        "SELECT (limits->>'fallback_targets')::BIGINT
+        "SELECT CASE WHEN valid_until IS NOT NULL AND valid_until<=now() THEN 0 ELSE (limits->>'fallback_targets')::BIGINT END
          FROM tenant_plan_profiles WHERE tenant_id=$1 FOR UPDATE",
     )
     .bind(tenant_id)

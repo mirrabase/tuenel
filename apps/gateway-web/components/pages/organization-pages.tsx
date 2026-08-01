@@ -843,7 +843,7 @@ type BillingOverview = {
 
 type ManagedBillingStatus = {
   configured: boolean
-  access_kind?: "free" | "subscription" | "lifetime"
+  access_kind?: "free" | "trial" | "subscription" | "lifetime"
   tier: "free" | "core" | "pro"
   interval?: "monthly" | "annual"
   status?:
@@ -876,6 +876,17 @@ type ManagedBillingStatus = {
   features: Record<string, boolean | string>
   overages: string[]
   allowed_transitions: ("free" | "core" | "pro")[]
+  trial: {
+    status: "not_started" | "active" | "expired" | "converted" | "revoked"
+    started_at?: string
+    ends_at?: string
+    plan?: "pro"
+    claimed_at?: string
+  }
+  remaining_trial_days: number
+  cancel_at_period_end: boolean
+  checkout_required: boolean
+  paid_features_accessible: boolean
 }
 
 type BillingCatalog = {
@@ -983,6 +994,26 @@ export function OrganizationBillingPage() {
     }
   }
 
+  async function postBillingAction(
+    action: "trial/start" | "subscription/cancel" | "subscription/resume",
+    success: string
+  ) {
+    setCommercialPending(true)
+    try {
+      await gatewayFetch(
+        `/commercial/tenants/${tenantId}/billing/${action}`,
+        tenantId,
+        { method: "POST" }
+      )
+      toast.success(success)
+      managed.reload()
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : "Billing action failed")
+    } finally {
+      setCommercialPending(false)
+    }
+  }
+
   return (
     <>
       <PageHeader
@@ -1027,6 +1058,87 @@ export function OrganizationBillingPage() {
             catalog.reload()
           }}
         >
+          {managed.data?.trial.status === "not_started" &&
+            accessKind === "free" && (
+              <Card className="mb-6 border-primary/40">
+                <CardHeader>
+                  <CardTitle>Start your 30-day free trial</CardTitle>
+                  <CardDescription>
+                    Get 30 days of Tuenel free. No credit card required. No
+                    automatic charge. Upgrade only when you&apos;re ready.
+                  </CardDescription>
+                </CardHeader>
+                <CardContent className="flex flex-wrap items-center justify-between gap-4">
+                  <p className="text-sm text-muted-foreground">
+                    Includes the Pro plan. Your existing data remains available
+                    when the trial ends.
+                  </p>
+                  {canManage ? (
+                    <Button
+                      disabled={commercialPending}
+                      onClick={() =>
+                        void postBillingAction(
+                          "trial/start",
+                          "Your 30-day Pro trial is active."
+                        )
+                      }
+                    >
+                      Start free trial
+                    </Button>
+                  ) : (
+                    <p className="text-xs text-muted-foreground">
+                      An owner or admin can start the trial.
+                    </p>
+                  )}
+                </CardContent>
+              </Card>
+            )}
+          {accessKind === "trial" && managed.data?.trial.ends_at && (
+            <Alert className="mb-6">
+              <AlertTitle>
+                Pro trial active · {managed.data.remaining_trial_days} days remaining
+              </AlertTitle>
+              <AlertDescription>
+                Your trial ends on {new Date(managed.data.trial.ends_at).toLocaleString()}.
+                No payment method is stored and you will not be charged automatically.
+                <div className="mt-3 h-2 overflow-hidden rounded-full bg-muted">
+                  <div
+                    className="h-full bg-primary"
+                    style={{ width: `${Math.max(0, Math.min(100, (managed.data.remaining_trial_days / 30) * 100))}%` }}
+                  />
+                </div>
+              </AlertDescription>
+            </Alert>
+          )}
+          {(managed.data?.trial.status === "expired" ||
+            managed.data?.trial.status === "revoked") &&
+            accessKind === "free" && (
+              <Alert className="mb-6">
+                <AlertTitle>Your free trial has ended</AlertTitle>
+                <AlertDescription>
+                  Paid features are locked, but your existing data has not been deleted.
+                  Choose a plan below whenever you&apos;re ready.
+                </AlertDescription>
+              </Alert>
+            )}
+          {managed.data?.cancel_at_period_end && managed.data.ends_at && (
+            <Alert className="mb-6">
+              <AlertTitle>Cancellation scheduled</AlertTitle>
+              <AlertDescription>
+                Your access remains active until {new Date(managed.data.ends_at).toLocaleString()}.
+                {canManage && (
+                  <Button
+                    className="ml-3"
+                    size="sm"
+                    disabled={commercialPending}
+                    onClick={() => void postBillingAction("subscription/resume", "Subscription resumed.")}
+                  >
+                    Resume subscription
+                  </Button>
+                )}
+              </AlertDescription>
+            </Alert>
+          )}
           <div className="mb-4 flex items-center justify-between gap-4">
             <div>
               <Badge variant="secondary" className="capitalize">
@@ -1177,11 +1289,14 @@ export function OrganizationBillingPage() {
                         disabled={commercialPending}
                         onClick={() =>
                           void (managed.data?.configured
-                            ? setPlanConfirmation(tier)
-                            : openCommercialBilling("checkout", tier))
+                            && accessKind === "subscription"
+                              ? setPlanConfirmation(tier)
+                              : openCommercialBilling("checkout", tier))
                         }
                       >
-                        {managed.data?.configured
+                        {accessKind === "trial"
+                          ? `Upgrade to ${tier}`
+                          : managed.data?.configured
                           ? `Change to ${tier}`
                           : `Choose ${tier}`}
                       </Button>
@@ -1195,6 +1310,20 @@ export function OrganizationBillingPage() {
               )
             })}
           </div>
+          {accessKind === "subscription" && canManage && !managed.data?.cancel_at_period_end && (
+            <div className="mb-6 flex flex-wrap items-center justify-between gap-3 rounded-lg border p-4">
+              <p className="text-sm text-muted-foreground">
+                Cancel anytime. Your access will remain active until the end of your current billing period.
+              </p>
+              <Button
+                variant="outline"
+                disabled={commercialPending}
+                onClick={() => void postBillingAction("subscription/cancel", "Cancellation scheduled.")}
+              >
+                Cancel subscription
+              </Button>
+            </div>
+          )}
           <Dialog
             open={planConfirmation !== null}
             onOpenChange={(open) => {
