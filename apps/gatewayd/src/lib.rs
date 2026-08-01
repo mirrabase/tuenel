@@ -863,6 +863,11 @@ async fn build_runtime(
         .runtime_resources()
         .await
         .map_err(|_| "configuration repository unavailable".to_owned())?;
+    let provider_scopes = resources
+        .iter()
+        .filter(|resource| resource.kind == "providers")
+        .map(|resource| (resource.id.clone(), resource.tenant_id.clone()))
+        .collect::<std::collections::HashMap<_, _>>();
     let mut providers: Vec<Arc<dyn ModelProvider>> = Vec::new();
     let mut targets = Vec::new();
     for resource in resources {
@@ -918,6 +923,12 @@ async fn build_runtime(
                 providers.push(provider);
             }
             "model_routes" => {
+                let provider_id = text(&resource.body, "provider")?;
+                if provider_scopes.get(provider_id).map(Option::as_deref)
+                    != Some(resource.tenant_id.as_deref())
+                {
+                    return Err("model route references a provider outside its tenant scope".into());
+                }
                 let priority = resource
                     .body
                     .get("priority")
@@ -931,7 +942,7 @@ async fn build_runtime(
                         .get("project_id")
                         .and_then(serde_json::Value::as_str)
                         .map(str::to_owned),
-                    provider: text(&resource.body, "provider")?.to_owned(),
+                    provider: provider_id.to_owned(),
                     requested_model: text(&resource.body, "requested_model")?.to_owned(),
                     upstream_model: text(&resource.body, "upstream_model")?.to_owned(),
                     priority,

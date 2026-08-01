@@ -327,7 +327,11 @@ async fn check_provider(
     Path(id): Path<String>,
     headers: HeaderMap,
 ) -> Result<Json<Value>, ApiError> {
-    admin_principal(&state, &headers).await?;
+    let principal = admin_principal(&state, &headers).await?;
+    admin(&state)?
+        .authorize_resource(&principal, ResourceKind::Providers, &id)
+        .await
+        .map_err(map_admin)?;
     let repository = state
         .provider_health
         .as_deref()
@@ -363,6 +367,10 @@ async fn provider_models(
     headers: HeaderMap,
 ) -> Result<Json<Value>, ApiError> {
     let principal = admin_principal(&state, &headers).await?;
+    admin(&state)?
+        .authorize_resource(&principal, ResourceKind::Providers, &id)
+        .await
+        .map_err(map_admin)?;
     let models = state
         .gateway
         .list_provider_models(&id)

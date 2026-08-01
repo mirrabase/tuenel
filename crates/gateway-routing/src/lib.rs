@@ -75,6 +75,9 @@ impl RoutePlan {
             .map(rank)
             .max()
             .unwrap_or(-1);
+        if selected_rank < 0 {
+            return Err(RoutingError::UnknownModel);
+        }
         let routes = self
             .targets()
             .filter(|target| target.requested_model == model && rank(target) == selected_rank)
@@ -197,6 +200,25 @@ mod tests {
         assert_eq!(
             plan.route_for(Some("t"), Some("other"), "alias").unwrap()[0].provider,
             "tenant"
+        );
+    }
+
+    #[test]
+    fn rejects_targets_owned_only_by_another_tenant() {
+        let plan = RoutePlan::new(vec![RouteTarget {
+            tenant_id: Some("tenant-a".into()),
+            project_id: Some("project-a".into()),
+            provider: "private-provider".into(),
+            requested_model: "private-alias".into(),
+            upstream_model: "private-model".into(),
+            priority: 1,
+            enabled: true,
+        }])
+        .unwrap();
+
+        assert!(
+            plan.route_for(Some("tenant-b"), Some("project-b"), "private-alias")
+                .is_err()
         );
     }
 

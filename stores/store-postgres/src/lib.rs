@@ -843,6 +843,76 @@ mod managed_quota_tests {
     }
 
     #[tokio::test]
+    async fn provider_lookup_and_model_cache_are_tenant_scoped() {
+        let Ok(database_url) = std::env::var("TEST_DATABASE_URL") else {
+            return;
+        };
+        let pool = PgPoolOptions::new()
+            .max_connections(2)
+            .connect(&database_url)
+            .await
+            .unwrap();
+        sqlx::migrate!("../../migrations").run(&pool).await.unwrap();
+        let store = PostgresStore { pool: pool.clone() };
+        let tenant_a = format!("provider-scope-a-{}", Uuid::new_v4());
+        let tenant_b = format!("provider-scope-b-{}", Uuid::new_v4());
+        let provider_id = format!("provider-scope-{}", Uuid::new_v4());
+        for tenant_id in [&tenant_a, &tenant_b] {
+            sqlx::query(
+                "INSERT INTO tenants(id,name,slug,daily_token_limit) VALUES($1,$1,$1,1000000)",
+            )
+            .bind(tenant_id)
+            .execute(&pool)
+            .await
+            .unwrap();
+        }
+        sqlx::query(
+            "INSERT INTO admin_resources(kind,id,tenant_id,body)
+             VALUES('providers',$1,$2,'{\"name\":\"private\"}'::jsonb)",
+        )
+        .bind(&provider_id)
+        .bind(&tenant_a)
+        .execute(&pool)
+        .await
+        .unwrap();
+
+        assert!(
+            store
+                .resource_in_scope(ResourceKind::Providers, &provider_id, Some(&tenant_a))
+                .await
+                .unwrap()
+        );
+        assert!(
+            !store
+                .resource_in_scope(ResourceKind::Providers, &provider_id, Some(&tenant_b))
+                .await
+                .unwrap()
+        );
+        assert_eq!(
+            store
+                .cache_provider_models(&provider_id, &tenant_b, &["leaked-model".into()])
+                .await,
+            Err(gateway_admin::AdminError::NotFound)
+        );
+        let cached: Option<serde_json::Value> = sqlx::query_scalar(
+            "SELECT body->'available_models' FROM admin_resources
+             WHERE kind='providers' AND id=$1",
+        )
+        .bind(&provider_id)
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+        assert!(cached.is_none());
+
+        sqlx::query("DELETE FROM tenants WHERE id IN ($1,$2)")
+            .bind(&tenant_a)
+            .bind(&tenant_b)
+            .execute(&pool)
+            .await
+            .unwrap();
+    }
+
+    #[tokio::test]
     async fn tied_route_priorities_are_normalized_and_free_cannot_add_fallbacks() {
         let Ok(database_url) = std::env::var("TEST_DATABASE_URL") else {
             return;

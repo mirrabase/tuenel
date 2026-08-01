@@ -106,6 +106,12 @@ pub struct MutationContext {
 
 #[async_trait]
 pub trait AdminRepository: Send + Sync {
+    async fn resource_in_scope(
+        &self,
+        kind: ResourceKind,
+        id: &str,
+        tenant_id: Option<&str>,
+    ) -> Result<bool, AdminError>;
     async fn resource_secret_ref(
         &self,
         kind: ResourceKind,
@@ -179,6 +185,23 @@ impl AdminService {
         self
     }
 
+    pub async fn authorize_resource(
+        &self,
+        principal: &Principal,
+        kind: ResourceKind,
+        id: &str,
+    ) -> Result<(), AdminError> {
+        self.authorize(principal, Some(&principal.tenant_id), false)?;
+        if self.is_gateway_admin(principal) {
+            return Ok(());
+        }
+        self.repository
+            .resource_in_scope(kind, id, Some(&principal.tenant_id))
+            .await?
+            .then_some(())
+            .ok_or(AdminError::NotFound)
+    }
+
     pub async fn cache_provider_models(
         &self,
         principal: &Principal,
@@ -223,6 +246,8 @@ impl AdminService {
             .map(str::to_owned);
         self.authorize(principal, tenant.as_deref(), true)?;
         validate_resource(kind, &body)?;
+        self.validate_provider_scope(principal, kind, tenant.as_deref(), &body)
+            .await?;
         let mut stored_secret = None;
         if kind == ResourceKind::Providers {
             let object = body.as_object_mut().ok_or(AdminError::Invalid)?;
@@ -293,6 +318,8 @@ impl AdminService {
             .map(str::to_owned);
         self.authorize(principal, tenant.as_deref(), true)?;
         validate_resource(kind, &body)?;
+        self.validate_provider_scope(principal, kind, tenant.as_deref(), &body)
+            .await?;
         let previous = if kind == ResourceKind::Providers {
             self.repository.resource_secret_ref(kind, id).await?
         } else {
@@ -482,6 +509,30 @@ impl AdminService {
             }
         });
         allowed.then_some(()).ok_or(AdminError::Forbidden)
+    }
+
+    async fn validate_provider_scope(
+        &self,
+        principal: &Principal,
+        kind: ResourceKind,
+        requested_tenant: Option<&str>,
+        body: &Value,
+    ) -> Result<(), AdminError> {
+        if kind != ResourceKind::ModelRoutes {
+            return Ok(());
+        }
+        let provider_id = body
+            .get("provider")
+            .and_then(Value::as_str)
+            .ok_or(AdminError::Invalid)?;
+        let tenant_id = requested_tenant.or_else(|| {
+            (!self.is_gateway_admin(principal)).then_some(principal.tenant_id.as_str())
+        });
+        self.repository
+            .resource_in_scope(ResourceKind::Providers, provider_id, tenant_id)
+            .await?
+            .then_some(())
+            .ok_or(AdminError::NotFound)
     }
 
     fn is_gateway_admin(&self, principal: &Principal) -> bool {

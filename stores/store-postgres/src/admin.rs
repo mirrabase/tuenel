@@ -67,13 +67,32 @@ impl PostgresStore {
 
 #[async_trait]
 impl AdminRepository for PostgresStore {
+    async fn resource_in_scope(
+        &self,
+        kind: ResourceKind,
+        id: &str,
+        tenant_id: Option<&str>,
+    ) -> Result<bool, AdminError> {
+        sqlx::query_scalar(
+            "SELECT EXISTS(SELECT 1 FROM admin_resources
+             WHERE kind=$1 AND id=$2 AND tenant_id IS NOT DISTINCT FROM $3
+               AND retired_at IS NULL)",
+        )
+        .bind(kind.as_str())
+        .bind(id)
+        .bind(tenant_id)
+        .fetch_one(self.pool())
+        .await
+        .map_err(|_| AdminError::Unavailable)
+    }
+
     async fn cache_provider_models(
         &self,
         provider_id: &str,
         tenant_id: &str,
         models: &[String],
     ) -> Result<(), AdminError> {
-        sqlx::query(
+        let result = sqlx::query(
             "UPDATE admin_resources SET
                body=jsonb_set(jsonb_set(body,'{available_models}',$3::jsonb,true),
                               '{models_synced_at}',to_jsonb(now()::text),true),
@@ -86,7 +105,9 @@ impl AdminRepository for PostgresStore {
         .execute(self.pool())
         .await
         .map_err(|_| AdminError::Unavailable)?;
-        Ok(())
+        (result.rows_affected() == 1)
+            .then_some(())
+            .ok_or(AdminError::NotFound)
     }
 
     async fn resource_secret_ref(
