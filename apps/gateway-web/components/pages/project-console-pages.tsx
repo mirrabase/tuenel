@@ -1443,6 +1443,19 @@ function RouteEditor({
   const providers = useGatewayData<Page<Resource>>(
     projectPath("/admin/providers", session.tenantId)
   )
+  const existingRoutes = useGatewayData<Page<Resource>>(
+    projectPath("/admin/model-routes", session.tenantId, session.projectId)
+  )
+  const aliases = [
+    ...new Set(
+      (existingRoutes.data?.data ?? []).map((item) =>
+        text(item.requested_model, "")
+      )
+    ),
+  ].filter(Boolean).sort()
+  const [aliasMode, setAliasMode] = React.useState(
+    route ? text(route.requested_model, "") : "__new__"
+  )
   const [providerId, setProviderId] = React.useState<string>()
   const selectedProvider =
     providerId ?? text(route?.provider, providers.data?.data[0]?.id ?? "")
@@ -1525,11 +1538,42 @@ function RouteEditor({
           <FieldGroup>
             <Field>
               <FieldLabel>Alias</FieldLabel>
-              <Input
-                name="alias"
-                defaultValue={text(route?.requested_model, "")}
-                required
-              />
+              {route ? (
+                <Input
+                  name="alias"
+                  defaultValue={text(route.requested_model, "")}
+                  readOnly
+                  required
+                />
+              ) : (
+                <>
+                  <Select
+                    value={aliasMode}
+                    onValueChange={(value) => value && setAliasMode(value)}
+                  >
+                    <SelectTrigger className="w-full">
+                      <SelectValue />
+                    </SelectTrigger>
+                    <SelectContent>
+                      <SelectItem value="__new__">Create new alias</SelectItem>
+                      {aliases.map((alias) => (
+                        <SelectItem key={alias} value={alias}>
+                          {alias}
+                        </SelectItem>
+                      ))}
+                    </SelectContent>
+                  </Select>
+                  {aliasMode === "__new__" ? (
+                    <Input
+                      name="alias"
+                      placeholder="e.g. gateway-default"
+                      required
+                    />
+                  ) : (
+                    <input type="hidden" name="alias" value={aliasMode} />
+                  )}
+                </>
+              )}
             </Field>
             <Field>
               <FieldLabel>Provider</FieldLabel>
@@ -1574,9 +1618,23 @@ function RouteEditor({
                 name="priority"
                 type="number"
                 min={1}
-                defaultValue={Number(route?.priority ?? 1)}
+                value={
+                  route
+                    ? Number(route.priority ?? 1)
+                    : aliasMode === "__new__"
+                      ? 1
+                      : (existingRoutes.data?.data ?? []).filter(
+                            (item) =>
+                              text(item.requested_model, "") === aliasMode
+                          ).length + 1
+                }
+                readOnly
                 required
               />
+              <FieldDescription>
+                Priority is normalized automatically. Reorder targets from the
+                Routing page.
+              </FieldDescription>
             </Field>
             <Field orientation="horizontal">
               <Switch
@@ -1664,9 +1722,24 @@ export function ModelsPage() {
                       <TableCell className="font-mono font-medium">
                         {alias}
                       </TableCell>
-                      <TableCell>{text(primary.provider)}</TableCell>
+                      <TableCell>
+                        <div className="space-y-1">
+                          {ordered.map((target, index) => (
+                            <p key={String(target.id)}>
+                              {index === 0 ? "Primary: " : `Fallback ${index}: `}
+                              {text(target.provider)}
+                            </p>
+                          ))}
+                        </div>
+                      </TableCell>
                       <TableCell className="font-mono">
-                        {text(primary.upstream_model)}
+                        <div className="space-y-1">
+                          {ordered.map((target) => (
+                            <p key={String(target.id)}>
+                              {text(target.upstream_model)}
+                            </p>
+                          ))}
+                        </div>
                       </TableCell>
                       <TableCell>
                         {ordered.length > 1
@@ -1727,7 +1800,10 @@ export function RoutingPage() {
           "if-match": `"${route.version ?? 1}"`,
         },
         body: JSON.stringify({
-          priority: Math.max(1, Number(route.priority) + delta),
+          priority:
+            delta > 0
+              ? Number(route.priority) + 2
+              : Math.max(1, Number(route.priority) - 1),
         }),
       })
       routes.reload()
@@ -2059,7 +2135,11 @@ export function UsageCostPage() {
           <Metric
             label="Total cost"
             value={money(values.estimated_cost)}
-            detail="Estimated"
+            detail={
+              Number(values.unpriced_requests ?? 0) > 0
+                ? `${Number(values.unpriced_requests).toLocaleString()} requests unpriced`
+                : "Estimated"
+            }
           />
           <Metric
             label="Average cost/request"
@@ -2069,7 +2149,11 @@ export function UsageCostPage() {
                   ? Number(values.estimated_cost) / Number(values.requests)
                   : 0)
             )}
-            detail="Estimated"
+            detail={
+              Number(values.unpriced_requests ?? 0) > 0
+                ? "Priced requests only"
+                : "Estimated"
+            }
           />
           <Metric
             label="p95 latency"

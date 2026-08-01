@@ -1208,7 +1208,7 @@ async fn record_usage(
     status: UsageStatus,
     latency_ms: Option<u64>,
 ) -> Result<(), gateway_metering::MeteringError> {
-    let estimated_cost = metering
+    let cost = metering
         .cost_for(
             &reservation.provider,
             &reservation.upstream_model,
@@ -1230,7 +1230,8 @@ async fn record_usage(
                 requested_model: reservation.requested_model.clone(),
                 upstream_model: reservation.upstream_model.clone(),
                 usage,
-                estimated_cost,
+                estimated_cost: cost.amount,
+                pricing_status: cost.status,
                 status,
                 latency_ms,
                 occurred_at: Utc::now(),

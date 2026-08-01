@@ -13,3 +13,8 @@ rust_decimal.workspace = true
 thiserror.workspace = true
 chrono.workspace = true
 uuid.workspace = true
+
+[dev-dependencies]
+async-trait.workspace = true
+store-memory = { path = "../../stores/store-memory" }
+tokio.workspace = true

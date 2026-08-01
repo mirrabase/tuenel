@@ -5,7 +5,7 @@ use std::sync::Arc;
 use chrono::Utc;
 use gateway_pricing::PricingCatalog;
 use gateway_store::GatewayStore;
-use gateway_types::{QuotaReservation, UsageEvent};
+use gateway_types::{PricingStatus, QuotaReservation, UsageEvent};
 use rust_decimal::Decimal;
 use thiserror::Error;
 
@@ -37,6 +37,12 @@ pub struct MeteringService {
     catalog: Option<Arc<dyn PricingCatalog>>,
 }
 
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct CostEstimate {
+    pub amount: Decimal,
+    pub status: PricingStatus,
+}
+
 impl MeteringService {
     /// Construct a metering service.
     pub fn new(store: Arc<dyn GatewayStore>, pricing: Pricing) -> Self {
@@ -63,15 +69,25 @@ impl MeteringService {
         model: &str,
         prompt_tokens: u64,
         completion_tokens: u64,
-    ) -> Decimal {
+    ) -> CostEstimate {
         if let Some(catalog) = &self.catalog {
             if let Ok(Some(price)) = catalog.active_price(provider, model, Utc::now()).await {
-                return price
-                    .cost(prompt_tokens, completion_tokens, 0, Decimal::ZERO)
-                    .round_dp(8);
+                return CostEstimate {
+                    amount: price
+                        .cost(prompt_tokens, completion_tokens, 0, Decimal::ZERO)
+                        .round_dp(8),
+                    status: PricingStatus::Priced,
+                };
             }
+            return CostEstimate {
+                amount: Decimal::ZERO,
+                status: PricingStatus::Unpriced,
+            };
         }
-        self.cost(prompt_tokens, completion_tokens)
+        CostEstimate {
+            amount: self.cost(prompt_tokens, completion_tokens),
+            status: PricingStatus::LegacyEstimate,
+        }
     }
 
     /// Persist usage and finalize quota atomically.
@@ -105,9 +121,30 @@ pub enum MeteringError {
 
 #[cfg(test)]
 mod tests {
-    use rust_decimal::Decimal;
+    use std::sync::Arc;
 
-    use super::Pricing;
+    use async_trait::async_trait;
+    use chrono::{DateTime, Utc};
+    use gateway_pricing::{ModelPrice, PricingCatalog, PricingError};
+    use gateway_types::PricingStatus;
+    use rust_decimal::Decimal;
+    use store_memory::MemoryStore;
+
+    use super::{MeteringService, Pricing};
+
+    struct EmptyCatalog;
+
+    #[async_trait]
+    impl PricingCatalog for EmptyCatalog {
+        async fn active_price(
+            &self,
+            _provider_id: &str,
+            _upstream_model: &str,
+            _at: DateTime<Utc>,
+        ) -> Result<Option<ModelPrice>, PricingError> {
+            Ok(None)
+        }
+    }
 
     #[test]
     fn computes_decimal_cost() {
@@ -116,5 +153,20 @@ mod tests {
             output_per_million: Decimal::new(20, 0),
         };
         assert_eq!(pricing.cost(1_000, 500), Decimal::new(2, 2));
+    }
+
+    #[tokio::test]
+    async fn configured_catalog_marks_missing_prices_unpriced_without_estimates() {
+        let service = MeteringService::new(
+            Arc::new(MemoryStore::new()),
+            Pricing {
+                input_per_million: Decimal::TEN,
+                output_per_million: Decimal::TEN,
+            },
+        )
+        .with_catalog(Arc::new(EmptyCatalog));
+        let estimate = service.cost_for("provider", "unknown", 1_000_000, 1).await;
+        assert_eq!(estimate.amount, Decimal::ZERO);
+        assert_eq!(estimate.status, PricingStatus::Unpriced);
     }
 }

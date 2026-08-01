@@ -20,7 +20,10 @@ pub(super) fn routes() -> Router<AppState> {
             patch(update_project).delete(retire_project),
         )
         .route("/admin/providers", get(providers).post(create_provider))
-        .route("/admin/providers/{id}/models", get(provider_models))
+        .route(
+            "/admin/providers/{id}/models",
+            get(provider_models).post(refresh_provider_models),
+        )
         .route(
             "/admin/providers/{id}",
             patch(update_provider).delete(retire_provider),
@@ -284,7 +287,7 @@ async fn provider_models(
     Path(id): Path<String>,
     headers: HeaderMap,
 ) -> Result<Json<Value>, ApiError> {
-    admin_principal(&state, &headers).await?;
+    let principal = admin_principal(&state, &headers).await?;
     let models = state
         .gateway
         .list_provider_models(&id)
@@ -301,9 +304,26 @@ async fn provider_models(
             ),
             _ => ApiError::service_unavailable("provider model discovery unavailable"),
         })?;
+    let mut models = models;
+    models.sort();
+    models.dedup();
+    admin(&state)?
+        .cache_provider_models(&principal, &id, &models)
+        .await
+        .map_err(map_admin)?;
     Ok(Json(json!({
-        "data": models.into_iter().map(|id| json!({ "id": id })).collect::<Vec<_>>()
+        "data": models.into_iter().map(|id| json!({ "id": id })).collect::<Vec<_>>(),
+        "source": "upstream",
+        "synced_at": chrono::Utc::now(),
     })))
+}
+
+async fn refresh_provider_models(
+    state: State<AppState>,
+    path: Path<String>,
+    headers: HeaderMap,
+) -> Result<Json<Value>, ApiError> {
+    provider_models(state, path, headers).await
 }
 
 async fn retry_billing(

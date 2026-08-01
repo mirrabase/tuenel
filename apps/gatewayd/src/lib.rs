@@ -875,6 +875,16 @@ async fn build_runtime(
                 let credential =
                     runtime_credential(&resource.id, &resource.body, settings, secrets).await?;
                 let provider: Arc<dyn ModelProvider> = match provider_type {
+                    "openai" => Arc::new(
+                        OpenAiCompatibleProvider::new_openai(
+                            resource.id,
+                            url::Url::parse("https://api.openai.com/v1/")
+                                .expect("canonical OpenAI URL"),
+                            credential.ok_or_else(|| "OpenAI credential is missing".to_owned())?,
+                            settings.request_timeout,
+                        )
+                        .map_err(|error| error.to_string())?,
+                    ),
                     "anthropic" => Arc::new(
                         AnthropicProvider::new(
                             resource.id,
@@ -937,8 +947,17 @@ async fn build_runtime(
     }
     targets.sort_by_key(|target| target.priority);
     if targets.is_empty() {
-        return setup_gateway(settings, policy, quota, metering, security)
-            .map_err(|error| error.to_string());
+        let provider: Arc<dyn ModelProvider> = Arc::new(SetupProvider);
+        targets.push(RouteTarget {
+            tenant_id: None,
+            project_id: None,
+            provider: provider.id().to_owned(),
+            requested_model: settings.model_alias.clone(),
+            upstream_model: "unconfigured".into(),
+            priority: 1,
+            enabled: true,
+        });
+        providers.push(provider);
     }
     let first = targets
         .iter()
@@ -1072,6 +1091,14 @@ async fn reconcile_expired(store: Arc<dyn GatewayStore>, metering: MeteringServi
                 completion_tokens: reservation.completion_tokens,
                 estimated: true,
             };
+            let cost = metering
+                .cost_for(
+                    &reservation.provider,
+                    &reservation.upstream_model,
+                    usage.prompt_tokens,
+                    usage.completion_tokens,
+                )
+                .await;
             let event = UsageEvent {
                 event_id: Uuid::now_v7(),
                 request_id: reservation.request_id,
@@ -1083,14 +1110,8 @@ async fn reconcile_expired(store: Arc<dyn GatewayStore>, metering: MeteringServi
                 requested_model: reservation.requested_model.clone(),
                 upstream_model: reservation.upstream_model.clone(),
                 usage,
-                estimated_cost: metering
-                    .cost_for(
-                        &reservation.provider,
-                        &reservation.upstream_model,
-                        usage.prompt_tokens,
-                        usage.completion_tokens,
-                    )
-                    .await,
+                estimated_cost: cost.amount,
+                pricing_status: cost.status,
                 status: UsageStatus::Interrupted,
                 latency_ms: None,
                 occurred_at: Utc::now(),

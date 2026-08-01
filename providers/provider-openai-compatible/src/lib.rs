@@ -27,15 +27,48 @@ pub struct OpenAiCompatibleProvider {
     models_endpoint: Url,
     api_key: Option<SecretString>,
     client: reqwest::Client,
+    dialect: OpenAiDialect,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum OpenAiDialect {
+    Compatible,
+    Official,
 }
 
 impl OpenAiCompatibleProvider {
     /// Build an adapter with bounded connect and total request timeouts.
     pub fn new(
         id: String,
+        base_url: Url,
+        api_key: Option<SecretString>,
+        timeout: Duration,
+    ) -> Result<Self, ProviderError> {
+        Self::with_dialect(id, base_url, api_key, timeout, OpenAiDialect::Compatible)
+    }
+
+    /// Build the official OpenAI adapter. It uses the modern OpenAI request dialect.
+    pub fn new_openai(
+        id: String,
+        base_url: Url,
+        api_key: SecretString,
+        timeout: Duration,
+    ) -> Result<Self, ProviderError> {
+        Self::with_dialect(
+            id,
+            base_url,
+            Some(api_key),
+            timeout,
+            OpenAiDialect::Official,
+        )
+    }
+
+    fn with_dialect(
+        id: String,
         mut base_url: Url,
         api_key: Option<SecretString>,
         timeout: Duration,
+        dialect: OpenAiDialect,
     ) -> Result<Self, ProviderError> {
         if !base_url.path().ends_with('/') {
             let path = format!("{}/", base_url.path());
@@ -66,6 +99,7 @@ impl OpenAiCompatibleProvider {
             models_endpoint,
             api_key,
             client,
+            dialect,
         })
     }
 
@@ -198,7 +232,8 @@ impl ModelProvider for OpenAiCompatibleProvider {
         request: GatewayRequest,
     ) -> Result<GatewayResponse, ProviderError> {
         let prompt_upper = request.prompt_token_upper_bound();
-        let body = ProviderRequest::from_gateway(&context.upstream_model, &request, false);
+        let body =
+            ProviderRequest::from_gateway(&context.upstream_model, &request, false, self.dialect);
         let response = self.request(&body).send().await.map_err(map_reqwest)?;
         let response = require_success(response).await?;
         let response: ProviderResponse =
@@ -228,7 +263,8 @@ impl ModelProvider for OpenAiCompatibleProvider {
         context: ProviderContext,
         request: GatewayRequest,
     ) -> Result<GatewayStream, ProviderError> {
-        let body = ProviderRequest::from_gateway(&context.upstream_model, &request, true);
+        let body =
+            ProviderRequest::from_gateway(&context.upstream_model, &request, true, self.dialect);
         let response = self.request(&body).send().await.map_err(map_reqwest)?;
         let response = require_success(response).await?;
         let mut source = response.bytes_stream().eventsource();
@@ -408,7 +444,10 @@ struct ProviderRequest<'a> {
     temperature: Option<f32>,
     #[serde(skip_serializing_if = "Option::is_none")]
     top_p: Option<f32>,
-    max_tokens: u32,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    max_tokens: Option<u32>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    max_completion_tokens: Option<u32>,
     #[serde(skip_serializing_if = "Vec::is_empty")]
     stop: Vec<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -416,14 +455,22 @@ struct ProviderRequest<'a> {
 }
 
 impl<'a> ProviderRequest<'a> {
-    fn from_gateway(model: &'a str, request: &'a GatewayRequest, stream: bool) -> Self {
+    fn from_gateway(
+        model: &'a str,
+        request: &'a GatewayRequest,
+        stream: bool,
+        dialect: OpenAiDialect,
+    ) -> Self {
         Self {
             model,
             messages: request.messages.iter().map(Into::into).collect(),
             stream,
             temperature: request.generation.temperature,
             top_p: request.generation.top_p,
-            max_tokens: request.generation.max_output_tokens,
+            max_tokens: (dialect == OpenAiDialect::Compatible)
+                .then_some(request.generation.max_output_tokens),
+            max_completion_tokens: (dialect == OpenAiDialect::Official)
+                .then_some(request.generation.max_output_tokens),
             stop: request.generation.stop.clone(),
             stream_options: stream.then_some(StreamOptions {
                 include_usage: true,
@@ -527,8 +574,36 @@ async fn require_success(response: reqwest::Response) -> Result<reqwest::Respons
     } else if status.as_u16() == 429 {
         Err(ProviderError::RateLimited)
     } else {
-        Err(ProviderError::Upstream(status.as_u16()))
+        let code = response
+            .json::<OpenAiErrorEnvelope>()
+            .await
+            .ok()
+            .and_then(|body| body.error.code.or(body.error.error_type))
+            .filter(|code| {
+                !code.is_empty()
+                    && code.len() <= 100
+                    && code
+                        .bytes()
+                        .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'_' | b'-'))
+            })
+            .unwrap_or_else(|| "upstream_rejected".to_owned());
+        Err(ProviderError::UpstreamRejected {
+            status: status.as_u16(),
+            code,
+        })
     }
+}
+
+#[derive(Deserialize)]
+struct OpenAiErrorEnvelope {
+    error: OpenAiErrorBody,
+}
+
+#[derive(Deserialize)]
+struct OpenAiErrorBody {
+    code: Option<String>,
+    #[serde(rename = "type")]
+    error_type: Option<String>,
 }
 
 fn map_reqwest(error: reqwest::Error) -> ProviderError {
@@ -543,19 +618,19 @@ fn map_reqwest(error: reqwest::Error) -> ProviderError {
 mod tests {
     use axum::{
         Router,
-        http::header::CONTENT_TYPE,
+        http::{StatusCode, header::CONTENT_TYPE},
         response::IntoResponse,
         routing::{get, post},
     };
     use futures::StreamExt;
-    use gateway_providers::{ModelProvider, ProviderContext, ProviderHealthStatus};
+    use gateway_providers::{ModelProvider, ProviderContext, ProviderError, ProviderHealthStatus};
     use gateway_types::{
         GatewayMessage, GatewayRequest, GatewayStreamEvent, GenerationParameters, MessageRole,
     };
     use url::Url;
     use uuid::Uuid;
 
-    use super::OpenAiCompatibleProvider;
+    use super::{OpenAiCompatibleProvider, OpenAiDialect, ProviderRequest};
 
     fn request(stream: bool) -> GatewayRequest {
         GatewayRequest {
@@ -612,6 +687,61 @@ mod tests {
         assert_eq!(response.content, "hi");
         assert_eq!(response.model, "gateway-default");
         assert!(!response.usage.estimated);
+    }
+
+    #[test]
+    fn official_openai_uses_the_modern_completion_token_field() {
+        let gateway_request = request(false);
+        let official = serde_json::to_value(ProviderRequest::from_gateway(
+            "gpt-5",
+            &gateway_request,
+            false,
+            OpenAiDialect::Official,
+        ))
+        .unwrap();
+        assert_eq!(official["max_completion_tokens"], 32);
+        assert!(official.get("max_tokens").is_none());
+
+        let compatible = serde_json::to_value(ProviderRequest::from_gateway(
+            "qwen",
+            &gateway_request,
+            false,
+            OpenAiDialect::Compatible,
+        ))
+        .unwrap();
+        assert_eq!(compatible["max_tokens"], 32);
+        assert!(compatible.get("max_completion_tokens").is_none());
+    }
+
+    #[tokio::test]
+    async fn preserves_safe_structured_upstream_error_codes() {
+        let app = Router::new().route(
+            "/v1/chat/completions",
+            post(|| async {
+                (
+                    StatusCode::UNAUTHORIZED,
+                    axum::Json(serde_json::json!({
+                        "error": {"type": "invalid_request_error", "code": "invalid_api_key"}
+                    })),
+                )
+            }),
+        );
+        let error = provider(app)
+            .await
+            .execute(
+                ProviderContext {
+                    request_id: Uuid::new_v4(),
+                    upstream_model: "gpt-5".into(),
+                },
+                request(false),
+            )
+            .await
+            .unwrap_err();
+        assert!(matches!(
+            error,
+            ProviderError::UpstreamRejected { status: 401, code }
+                if code == "invalid_api_key"
+        ));
     }
 
     #[tokio::test]

@@ -147,6 +147,12 @@ pub trait AdminRepository: Send + Sync {
         event_id: Uuid,
         context: &MutationContext,
     ) -> Result<Mutation, AdminError>;
+    async fn cache_provider_models(
+        &self,
+        provider_id: &str,
+        tenant_id: &str,
+        models: &[String],
+    ) -> Result<(), AdminError>;
 }
 
 #[derive(Clone)]
@@ -171,6 +177,18 @@ impl AdminService {
     pub fn with_secrets(mut self, secrets: gateway_secrets::SecretService) -> Self {
         self.secrets = Some(secrets);
         self
+    }
+
+    pub async fn cache_provider_models(
+        &self,
+        principal: &Principal,
+        provider_id: &str,
+        models: &[String],
+    ) -> Result<(), AdminError> {
+        self.authorize(principal, Some(&principal.tenant_id), false)?;
+        self.repository
+            .cache_provider_models(provider_id, &principal.tenant_id, models)
+            .await
     }
 
     pub async fn list(
@@ -536,7 +554,7 @@ fn validate_resource(kind: ResourceKind, body: &Value) -> Result<(), AdminError>
             text("name").or_else(|_| text("id"))?;
             if !matches!(
                 text("provider_type")?,
-                "openai_compatible" | "anthropic" | "gemini"
+                "openai" | "openai_compatible" | "anthropic" | "gemini"
             ) || text("base_url")?.parse::<url::Url>().is_err()
             {
                 return Err(AdminError::Invalid);

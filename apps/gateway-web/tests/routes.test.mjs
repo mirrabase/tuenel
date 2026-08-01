@@ -500,7 +500,27 @@ test("managed billing renders unlimited values and roadmap features truthfully",
   assert.match(billing, /API key devices \/ credentials/)
   assert.match(billing, /custom_domain/)
   assert.match(billing, /Coming Soon/)
+  assert.match(billing, /Confirm plan change/)
+  assert.match(billing, /standard\s+proration/)
+  assert.match(billing, /setPlanConfirmation\(tier\)/)
   assert.match(shell, /Unlimited plan/)
+})
+
+test("providers discover upstream models before routes and expose explicit pricing", () => {
+  const providers = readFileSync(
+    join(root, "components/pages/providers-page.tsx"),
+    "utf8"
+  )
+  const organization = readFileSync(
+    join(root, "components/pages/organization-pages.tsx"),
+    "utf8"
+  )
+  assert.match(providers, /provider\.id\)\}\/models/)
+  assert.match(providers, /Unpriced/)
+  assert.match(providers, /Set price/)
+  assert.match(providers, /input_cost_per_million/)
+  assert.match(organization, /available_models/)
+  assert.match(organization, /syncProvider\(String\(form\.get\(["']id["']\)\)\)/)
 })
 
 test("one canonical logo brands metadata, auth, picker, and sidebar", () => {

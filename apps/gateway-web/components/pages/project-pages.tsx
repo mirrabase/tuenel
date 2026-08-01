@@ -47,6 +47,7 @@ type Project = {
   created_at?: string
   status?: string
   environment?: string
+  endpoint_id?: string
 }
 
 export function ProjectsPage() {
@@ -189,6 +190,11 @@ export function ProjectsPage() {
                           {project.status ?? "Active"} ·{" "}
                           {project.environment ?? "Production"}
                         </CardDescription>
+                        {project.endpoint_id && (
+                          <p className="break-all font-mono text-xs text-muted-foreground">
+                            https://{project.endpoint_id}.mirrabase.com/v1
+                          </p>
+                        )}
                       </CardHeader>
                       <CardContent className="mt-auto space-y-3">
                         <div className="grid grid-cols-2 gap-3 text-sm">

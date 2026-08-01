@@ -67,6 +67,28 @@ impl PostgresStore {
 
 #[async_trait]
 impl AdminRepository for PostgresStore {
+    async fn cache_provider_models(
+        &self,
+        provider_id: &str,
+        tenant_id: &str,
+        models: &[String],
+    ) -> Result<(), AdminError> {
+        sqlx::query(
+            "UPDATE admin_resources SET
+               body=jsonb_set(jsonb_set(body,'{available_models}',$3::jsonb,true),
+                              '{models_synced_at}',to_jsonb(now()::text),true),
+               updated_at=updated_at
+             WHERE kind='providers' AND id=$1 AND tenant_id=$2 AND retired_at IS NULL",
+        )
+        .bind(provider_id)
+        .bind(tenant_id)
+        .bind(serde_json::to_value(models).map_err(|_| AdminError::Invalid)?)
+        .execute(self.pool())
+        .await
+        .map_err(|_| AdminError::Unavailable)?;
+        Ok(())
+    }
+
     async fn resource_secret_ref(
         &self,
         kind: ResourceKind,
@@ -162,23 +184,27 @@ impl AdminRepository for PostgresStore {
                     .then(|| context.tenant_id.clone())
                     .flatten()
             });
+        if kind == ResourceKind::Projects && !object.contains_key("endpoint_id") {
+            object.insert(
+                "endpoint_id".to_owned(),
+                Value::String(format!("p{}", Uuid::new_v4().simple())),
+            );
+        }
         if id.trim().is_empty() || tenant_id.as_deref().is_some_and(str::is_empty) {
             return Err(AdminError::Invalid);
         }
         let mut transaction = self.pool().begin().await.map_err(admin_sqlx)?;
+        if kind == ResourceKind::ModelRoutes {
+            lock_model_routes(&mut transaction, tenant_id.as_deref()).await?;
+        }
+        if kind == ResourceKind::ModelPrices {
+            close_active_model_prices(&mut transaction, tenant_id.as_deref(), &body).await?;
+        }
         if let Some(tenant_id) = tenant_id.as_deref() {
             let limit_key = match kind {
                 ResourceKind::Projects => Some("projects"),
                 ResourceKind::Providers => Some("providers"),
                 ResourceKind::Policies | ResourceKind::QuotaLimits => Some("budget_rules"),
-                ResourceKind::ModelRoutes
-                    if body
-                        .get("priority")
-                        .and_then(Value::as_u64)
-                        .is_some_and(|value| value > 1) =>
-                {
-                    Some("fallback_targets")
-                }
                 _ => None,
             };
             if let Some(limit_key) = limit_key {
@@ -192,10 +218,10 @@ impl AdminRepository for PostgresStore {
                 .map_err(admin_sqlx)?
                 .flatten();
                 if let Some(limit) = limit {
-                    let current: i64 = if kind == ResourceKind::ModelRoutes {
-                        sqlx::query_scalar("SELECT count(*) FROM admin_resources WHERE tenant_id=$1 AND kind='model_routes' AND retired_at IS NULL AND (body->>'priority')::int>1")
-                            .bind(tenant_id).fetch_one(&mut *transaction).await.map_err(admin_sqlx)?
-                    } else if matches!(kind, ResourceKind::Policies | ResourceKind::QuotaLimits) {
+                    let current: i64 = if matches!(
+                        kind,
+                        ResourceKind::Policies | ResourceKind::QuotaLimits
+                    ) {
                         sqlx::query_scalar("SELECT count(*) FROM admin_resources WHERE tenant_id=$1 AND kind IN ('policies','quota_limits') AND retired_at IS NULL")
                             .bind(tenant_id).fetch_one(&mut *transaction).await.map_err(admin_sqlx)?
                     } else {
@@ -209,7 +235,7 @@ impl AdminRepository for PostgresStore {
                 }
             }
         }
-        let resource: Value = sqlx::query_scalar(
+        let mut resource: Value = sqlx::query_scalar(
             "INSERT INTO admin_resources(kind,id,tenant_id,body,enabled)
              VALUES($1,$2,$3,$4,$5)
              RETURNING body || jsonb_build_object(
@@ -225,6 +251,11 @@ impl AdminRepository for PostgresStore {
         .fetch_one(&mut *transaction)
         .await
         .map_err(admin_sqlx)?;
+        if kind == ResourceKind::ModelRoutes {
+            normalize_model_routes(&mut transaction, tenant_id.as_deref()).await?;
+            enforce_fallback_limit(&mut transaction, tenant_id.as_deref()).await?;
+            resource = mutation_resource(&mut transaction, kind, &id).await?;
+        }
         let audit_id = audit(
             &mut transaction,
             kind,
@@ -250,6 +281,9 @@ impl AdminRepository for PostgresStore {
         object.remove("credential");
         let enabled = object.remove("enabled").and_then(|value| value.as_bool());
         let mut transaction = self.pool().begin().await.map_err(admin_sqlx)?;
+        if kind == ResourceKind::ModelRoutes {
+            lock_model_routes(&mut transaction, context.tenant_id.as_deref()).await?;
+        }
         let row = sqlx::query(
             "UPDATE admin_resources
              SET body=body || $4,enabled=COALESCE($7,enabled),version=version+1,updated_at=now()
@@ -286,9 +320,14 @@ impl AdminRepository for PostgresStore {
             tenant_id.as_deref(),
         )
         .await?;
-        let resource = row
+        let mut resource = row
             .try_get("resource")
             .map_err(|_| AdminError::Unavailable)?;
+        if kind == ResourceKind::ModelRoutes {
+            normalize_model_routes(&mut transaction, tenant_id.as_deref()).await?;
+            enforce_fallback_limit(&mut transaction, tenant_id.as_deref()).await?;
+            resource = mutation_resource(&mut transaction, kind, id).await?;
+        }
         transaction.commit().await.map_err(admin_sqlx)?;
         Ok(Mutation { resource, audit_id })
     }
@@ -301,6 +340,9 @@ impl AdminRepository for PostgresStore {
         context: &MutationContext,
     ) -> Result<Mutation, AdminError> {
         let mut transaction = self.pool().begin().await.map_err(admin_sqlx)?;
+        if kind == ResourceKind::ModelRoutes {
+            lock_model_routes(&mut transaction, context.tenant_id.as_deref()).await?;
+        }
         let row = sqlx::query(
             "UPDATE admin_resources
              SET enabled=false,retired_at=COALESCE(retired_at,now()),version=version+1,updated_at=now()
@@ -335,9 +377,13 @@ impl AdminRepository for PostgresStore {
             tenant_id.as_deref(),
         )
         .await?;
-        let resource = row
+        let mut resource = row
             .try_get("resource")
             .map_err(|_| AdminError::Unavailable)?;
+        if kind == ResourceKind::ModelRoutes {
+            normalize_model_routes(&mut transaction, tenant_id.as_deref()).await?;
+            resource = mutation_resource(&mut transaction, kind, id).await?;
+        }
         transaction.commit().await.map_err(admin_sqlx)?;
         Ok(Mutation { resource, audit_id })
     }
@@ -513,6 +559,7 @@ impl AdminRepository for PostgresStore {
                         'output_tokens',COALESCE(SUM(completion_tokens),0),
                         'total_tokens',COALESCE(SUM(total_tokens),0),
                         'estimated_cost',COALESCE(SUM(estimated_cost),0),
+                        'unpriced_requests',COUNT(*) FILTER (WHERE pricing_status='unpriced'),
                         'average_cost_per_request',CASE WHEN COUNT(*)=0 THEN 0
                             ELSE COALESCE(SUM(estimated_cost),0)/COUNT(*) END,
                         'successful_requests',COUNT(*) FILTER (WHERE status='succeeded'),
@@ -646,6 +693,7 @@ async fn usage_breakdowns(store: &PostgresStore, query: &ListQuery) -> Result<Va
             'requests',COUNT(*),'input_tokens',COALESCE(SUM(u.prompt_tokens),0),
             'output_tokens',COALESCE(SUM(u.completion_tokens),0),
             'estimated_cost',COALESCE(SUM(u.estimated_cost),0),
+            'unpriced_requests',COUNT(*) FILTER (WHERE u.pricing_status='unpriced'),
             'success_rate',100.0*COUNT(*) FILTER (WHERE u.status='succeeded')/COUNT(*)) AS value
          FROM usage_events u LEFT JOIN admin_resources p
            ON p.kind='projects' AND p.id=u.project_id
@@ -664,6 +712,7 @@ async fn usage_breakdowns(store: &PostgresStore, query: &ListQuery) -> Result<Va
             'input_tokens',COALESCE(SUM(prompt_tokens),0),
             'output_tokens',COALESCE(SUM(completion_tokens),0),
             'estimated_cost',COALESCE(SUM(estimated_cost),0),
+            'unpriced_requests',COUNT(*) FILTER (WHERE pricing_status='unpriced'),
             'success_rate',100.0*COUNT(*) FILTER (WHERE status='succeeded')/COUNT(*)) AS value
          FROM usage_events WHERE ($1::text IS NULL OR tenant_id=$1)
            AND ($2::text IS NULL OR project_id=$2)
@@ -680,6 +729,7 @@ async fn usage_breakdowns(store: &PostgresStore, query: &ListQuery) -> Result<Va
             'input_tokens',COALESCE(SUM(prompt_tokens),0),
             'output_tokens',COALESCE(SUM(completion_tokens),0),
             'estimated_cost',COALESCE(SUM(estimated_cost),0),
+            'unpriced_requests',COUNT(*) FILTER (WHERE pricing_status='unpriced'),
             'success_rate',100.0*COUNT(*) FILTER (WHERE status='succeeded')/COUNT(*)) AS value
          FROM usage_events WHERE ($1::text IS NULL OR tenant_id=$1)
            AND ($2::text IS NULL OR project_id=$2)
@@ -696,6 +746,7 @@ async fn usage_breakdowns(store: &PostgresStore, query: &ListQuery) -> Result<Va
             'input_tokens',COALESCE(SUM(prompt_tokens),0),
             'output_tokens',COALESCE(SUM(completion_tokens),0),
             'estimated_cost',COALESCE(SUM(estimated_cost),0),
+            'unpriced_requests',COUNT(*) FILTER (WHERE pricing_status='unpriced'),
             'success_rate',100.0*COUNT(*) FILTER (WHERE status='succeeded')/COUNT(*)) AS value
          FROM usage_events WHERE ($1::text IS NULL OR tenant_id=$1)
            AND ($2::text IS NULL OR project_id=$2)
@@ -922,6 +973,138 @@ async fn resource_miss(
     } else {
         AdminError::NotFound
     })
+}
+
+async fn lock_model_routes(
+    transaction: &mut Transaction<'_, Postgres>,
+    tenant_id: Option<&str>,
+) -> Result<(), AdminError> {
+    sqlx::query("SELECT pg_advisory_xact_lock(hashtextextended(COALESCE($1,''),0))")
+        .bind(tenant_id)
+        .execute(&mut **transaction)
+        .await
+        .map_err(admin_sqlx)?;
+    Ok(())
+}
+
+async fn normalize_model_routes(
+    transaction: &mut Transaction<'_, Postgres>,
+    tenant_id: Option<&str>,
+) -> Result<(), AdminError> {
+    sqlx::query(
+        "WITH ranked AS (
+           SELECT id,row_number() OVER (
+             PARTITION BY tenant_id,COALESCE(body->>'project_id',''),body->>'requested_model'
+             ORDER BY (body->>'priority')::int,updated_at DESC,id
+           ) AS position
+           FROM admin_resources
+           WHERE kind='model_routes' AND retired_at IS NULL
+             AND tenant_id IS NOT DISTINCT FROM $1
+         )
+         UPDATE admin_resources r
+         SET body=jsonb_set(r.body,'{priority}',to_jsonb(ranked.position::int),true),
+             version=r.version+1,updated_at=now()
+         FROM ranked
+         WHERE r.kind='model_routes' AND r.id=ranked.id
+           AND (r.body->>'priority')::int<>ranked.position",
+    )
+    .bind(tenant_id)
+    .execute(&mut **transaction)
+    .await
+    .map_err(admin_sqlx)?;
+    Ok(())
+}
+
+async fn close_active_model_prices(
+    transaction: &mut Transaction<'_, Postgres>,
+    tenant_id: Option<&str>,
+    body: &Value,
+) -> Result<(), AdminError> {
+    let provider_id = body
+        .get("provider_id")
+        .and_then(Value::as_str)
+        .ok_or(AdminError::Invalid)?;
+    let upstream_model = body
+        .get("upstream_model")
+        .and_then(Value::as_str)
+        .ok_or(AdminError::Invalid)?;
+    let effective_from = body
+        .get("effective_from")
+        .and_then(Value::as_str)
+        .ok_or(AdminError::Invalid)?;
+    sqlx::query(
+        "UPDATE admin_resources
+         SET body=jsonb_set(body,'{effective_until}',to_jsonb($4::text),true),
+             version=version+1,updated_at=now()
+         WHERE kind='model_prices' AND tenant_id IS NOT DISTINCT FROM $1
+           AND retired_at IS NULL AND enabled=true
+           AND body->>'provider_id'=$2 AND body->>'upstream_model'=$3
+           AND (body->>'effective_from')::timestamptz <= $4::timestamptz
+           AND (body->>'effective_until' IS NULL
+                OR (body->>'effective_until')::timestamptz > $4::timestamptz)",
+    )
+    .bind(tenant_id)
+    .bind(provider_id)
+    .bind(upstream_model)
+    .bind(effective_from)
+    .execute(&mut **transaction)
+    .await
+    .map_err(admin_sqlx)?;
+    Ok(())
+}
+
+async fn enforce_fallback_limit(
+    transaction: &mut Transaction<'_, Postgres>,
+    tenant_id: Option<&str>,
+) -> Result<(), AdminError> {
+    let Some(tenant_id) = tenant_id else {
+        return Ok(());
+    };
+    let limit = sqlx::query_scalar::<_, Option<i64>>(
+        "SELECT (limits->>'fallback_targets')::BIGINT
+         FROM tenant_plan_profiles WHERE tenant_id=$1 FOR UPDATE",
+    )
+    .bind(tenant_id)
+    .fetch_optional(&mut **transaction)
+    .await
+    .map_err(admin_sqlx)?
+    .flatten();
+    let Some(limit) = limit else {
+        return Ok(());
+    };
+    let current: i64 = sqlx::query_scalar(
+        "SELECT COALESCE(SUM(targets-1),0)::BIGINT FROM (
+           SELECT COUNT(*) AS targets FROM admin_resources
+           WHERE kind='model_routes' AND tenant_id=$1 AND retired_at IS NULL
+           GROUP BY COALESCE(body->>'project_id',''),body->>'requested_model'
+         ) aliases",
+    )
+    .bind(tenant_id)
+    .fetch_one(&mut **transaction)
+    .await
+    .map_err(admin_sqlx)?;
+    if current > limit {
+        return Err(AdminError::PlanLimit);
+    }
+    Ok(())
+}
+
+async fn mutation_resource(
+    transaction: &mut Transaction<'_, Postgres>,
+    kind: ResourceKind,
+    id: &str,
+) -> Result<Value, AdminError> {
+    sqlx::query_scalar(
+        "SELECT body || jsonb_build_object(
+           'id',id,'tenant_id',tenant_id,'version',version,'enabled',enabled,
+           'retired_at',retired_at,'created_at',created_at,'updated_at',updated_at)
+         FROM admin_resources WHERE kind=$1 AND id=$2",
+    )
+    .bind(kind.as_str())
+    .bind(id)
+    .fetch_one(&mut **transaction)
+    .await
+    .map_err(admin_sqlx)
 }
 
 async fn audit(

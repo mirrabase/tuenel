@@ -960,6 +960,19 @@ struct KeyScopeQuery {
 }
 
 async fn authenticate(state: &AppState, headers: &HeaderMap) -> Result<Principal, ApiError> {
+    let endpoint = project_endpoint(headers);
+    let endpoint_scope = if let Some(endpoint) = endpoint.as_deref() {
+        Some(
+            state
+                .store
+                .project_for_endpoint(endpoint)
+                .await
+                .map_err(|_| ApiError::service_unavailable("project endpoint lookup unavailable"))?
+                .ok_or_else(|| ApiError::not_found("project endpoint not found"))?,
+        )
+    } else {
+        None
+    };
     let credential = bearer_credential(headers)?;
     let principal =
         state
@@ -973,7 +986,31 @@ async fn authenticate(state: &AppState, headers: &HeaderMap) -> Result<Principal
                 }
                 AuthError::Invalid => ApiError::unauthorized(),
             })?;
-    bind_project(principal, headers)
+    let principal = bind_project(principal, headers)?;
+    if let Some((tenant_id, project_id)) = endpoint_scope {
+        if principal.tenant_id != tenant_id || principal.project_id.as_deref() != Some(&project_id)
+        {
+            return Err(ApiError::forbidden(
+                "credential is not valid for this project endpoint",
+            ));
+        }
+    }
+    Ok(principal)
+}
+
+fn project_endpoint(headers: &HeaderMap) -> Option<String> {
+    let host = headers
+        .get(axum::http::header::HOST)?
+        .to_str()
+        .ok()?
+        .split(':')
+        .next()?
+        .to_ascii_lowercase();
+    let label = host.strip_suffix(".mirrabase.com")?;
+    (label.len() == 33
+        && label.starts_with('p')
+        && label[1..].bytes().all(|byte| byte.is_ascii_hexdigit()))
+    .then_some(label.to_owned())
 }
 
 fn bind_project(mut principal: Principal, headers: &HeaderMap) -> Result<Principal, ApiError> {
@@ -1844,6 +1881,24 @@ impl From<GatewayError> for ApiError {
                 "upstream_rate_limit",
                 "upstream rate limit exceeded",
             ),
+            GatewayError::Provider(gateway_providers::ProviderError::UpstreamRejected {
+                status,
+                code,
+            }) if status == 401 || status == 403 => Self::new(
+                StatusCode::BAD_GATEWAY,
+                "authentication_error",
+                "upstream_authentication_failed",
+                &format!("upstream authentication failed ({code})"),
+            ),
+            GatewayError::Provider(gateway_providers::ProviderError::UpstreamRejected {
+                status,
+                code,
+            }) if status == 400 || status == 404 || status == 422 => Self::new(
+                StatusCode::BAD_GATEWAY,
+                "invalid_request_error",
+                "upstream_invalid_request",
+                &format!("upstream rejected the request ({code})"),
+            ),
             GatewayError::Provider(_) => Self::new(
                 StatusCode::BAD_GATEWAY,
                 "server_error",
@@ -1869,6 +1924,7 @@ mod tests {
 
     use super::{
         ChatCompletionRequest, StopInput, bind_project, ensure_principal_tenant, openapi_document,
+        project_endpoint,
     };
 
     #[test]
@@ -1918,5 +1974,29 @@ mod tests {
         );
         let other_tenant = "01900000-0000-7000-8000-000000000003".parse().unwrap();
         assert!(ensure_principal_tenant(&principal, other_tenant).is_err());
+    }
+
+    #[test]
+    fn recognizes_only_canonical_project_endpoint_hosts() {
+        let mut headers = HeaderMap::new();
+        headers.insert(
+            "host",
+            "p0123456789abcdef0123456789abcdef.mirrabase.com:443"
+                .parse()
+                .unwrap(),
+        );
+        assert_eq!(
+            project_endpoint(&headers).as_deref(),
+            Some("p0123456789abcdef0123456789abcdef")
+        );
+        headers.insert("host", "random.mirrabase.com".parse().unwrap());
+        assert_eq!(project_endpoint(&headers), None);
+        headers.insert(
+            "host",
+            "p0123456789abcdef0123456789abcdeg.mirrabase.com"
+                .parse()
+                .unwrap(),
+        );
+        assert_eq!(project_endpoint(&headers), None);
     }
 }
