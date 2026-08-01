@@ -64,6 +64,8 @@ type Provider = {
   enabled?: boolean
   credential_configured?: boolean
   version?: number
+  available_models?: string[]
+  models_synced_at?: string
 }
 
 export function OrganizationProvidersPage() {
@@ -71,34 +73,103 @@ export function OrganizationProvidersPage() {
   const providers = useGatewayData<Page<Provider>>(
     `/admin/providers?tenant_id=${tenantId}`
   )
-  const routes = useGatewayData<Page<JsonRecord>>(
-    `/admin/model-routes?tenant_id=${tenantId}`
-  )
   const health = useGatewayData<JsonRecord>(
     `/admin/system?tenant_id=${tenantId}`
   )
   const [open, setOpen] = React.useState(false)
   const [pending, setPending] = React.useState(false)
+  const [activating, setActivating] = React.useState<string[]>([])
   const canWrite = gatewayAdmin || ["owner", "admin"].includes(tenantRole)
   const healthRows = Array.isArray(health.data?.providers)
     ? (health.data.providers as JsonRecord[])
     : []
 
   function modelsFor(providerId: string) {
-    return (routes.data?.data ?? [])
-      .filter(
-        (route) =>
-          String(route.provider ?? route.provider_id ?? "") === providerId
-      )
-      .map((route) =>
-        String(route.upstream_model ?? route.requested_model ?? "")
-      )
-      .filter(Boolean)
+    return (
+      providers.data?.data.find((provider) => provider.id === providerId)
+        ?.available_models ?? []
+    )
+  }
+
+  async function syncProvider(providerId: string) {
+    setActivating((current) => [...new Set([...current, providerId])])
+    for (let attempt = 0; attempt < 8; attempt += 1) {
+      try {
+        await gatewayFetch(
+          `/admin/providers/${encodeURIComponent(providerId)}/check`,
+          tenantId,
+          {
+            method: "POST",
+          }
+        )
+        await gatewayFetch(
+          `/admin/providers/${encodeURIComponent(providerId)}/models`,
+          tenantId,
+          {
+            method: "POST",
+          }
+        )
+        providers.reload()
+        health.reload()
+        setActivating((current) => current.filter((id) => id !== providerId))
+        toast.success("Provider is healthy and models are synchronized")
+        return
+      } catch {
+        await new Promise((resolve) => window.setTimeout(resolve, 1000))
+      }
+    }
+    providers.reload()
+    health.reload()
+    setActivating((current) => current.filter((id) => id !== providerId))
+    toast.warning("Automatic provider verification needs attention")
+  }
+
+  async function monitorProvider(providerId: string) {
+    setActivating((current) => [...new Set([...current, providerId])])
+    for (let attempt = 0; attempt < 16; attempt += 1) {
+      await new Promise((resolve) => window.setTimeout(resolve, 750))
+      try {
+        const [providerPage, system] = await Promise.all([
+          gatewayFetch<Page<Provider>>(
+            `/admin/providers?tenant_id=${encodeURIComponent(tenantId)}`,
+            tenantId
+          ),
+          gatewayFetch<JsonRecord>(
+            `/admin/system?tenant_id=${encodeURIComponent(tenantId)}`,
+            tenantId
+          ),
+        ])
+        const provider = providerPage.data.find(
+          (item) => item.id === providerId
+        )
+        const rows = Array.isArray(system.providers)
+          ? (system.providers as JsonRecord[])
+          : []
+        const providerHealth = rows.find(
+          (row) => String(row.provider_id) === providerId
+        )
+        providers.reload()
+        health.reload()
+        if (
+          provider?.available_models?.length &&
+          providerHealth?.status === "healthy"
+        ) {
+          setActivating((current) => current.filter((id) => id !== providerId))
+          toast.success("Provider is healthy and models are synchronized")
+          return
+        }
+      } catch {
+        // The durable backend activation keeps running if this browser poll fails.
+      }
+    }
+    setActivating((current) => current.filter((id) => id !== providerId))
+    toast.warning("Provider saved; automatic verification is still pending")
   }
 
   async function create(event: React.FormEvent<HTMLFormElement>) {
     event.preventDefault()
     const form = new FormData(event.currentTarget)
+    const providerType = String(form.get("provider_type"))
     setPending(true)
     try {
       await gatewayFetch("/admin/providers", tenantId, {
@@ -107,35 +178,27 @@ export function OrganizationProvidersPage() {
         body: JSON.stringify({
           id: form.get("id"),
           name: form.get("name"),
-          provider_type: form.get("provider_type"),
-          base_url: form.get("base_url"),
+          provider_type: providerType,
+          base_url:
+            providerType === "openai"
+              ? "https://api.openai.com/v1/"
+              : form.get("base_url"),
           credential: form.get("credential"),
           tenant_id: tenantId,
         }),
       })
       setOpen(false)
       providers.reload()
-      toast.success("Provider added")
+      toast.success(
+        "Provider added. Verifying health and models automatically…"
+      )
+      void monitorProvider(String(form.get("id")))
     } catch (error) {
       toast.error(
         error instanceof Error ? error.message : "Provider creation failed"
       )
     } finally {
       setPending(false)
-    }
-  }
-
-  async function check(provider: Provider) {
-    try {
-      await gatewayFetch(`/admin/providers/${provider.id}/check`, tenantId, {
-        method: "POST",
-      })
-      health.reload()
-      toast.success("Provider health refreshed")
-    } catch (error) {
-      toast.error(
-        error instanceof Error ? error.message : "Health check failed"
-      )
     }
   }
 
@@ -192,6 +255,18 @@ export function OrganizationProvidersPage() {
                     (row) => String(row.provider_id) === provider.id
                   )
                   const models = modelsFor(provider.id)
+                  const checking = activating.includes(provider.id)
+                  const ready =
+                    providerHealth?.status === "healthy" && models.length > 0
+                  const status = checking
+                    ? "Checking"
+                    : ready
+                      ? "Healthy"
+                      : providerHealth?.status === "unhealthy"
+                        ? "Unhealthy"
+                        : models.length
+                          ? "Health pending"
+                          : "Model sync pending"
                   return (
                     <TableRow key={provider.id}>
                       <TableCell>
@@ -204,16 +279,13 @@ export function OrganizationProvidersPage() {
                       </TableCell>
                       <TableCell>
                         <StatusBadge
-                          status={String(
-                            providerHealth?.status ??
-                              (provider.enabled === false
-                                ? "Disabled"
-                                : "Configured")
-                          )}
+                          status={
+                            provider.enabled === false ? "Disabled" : status
+                          }
                         />
                       </TableCell>
                       <TableCell>
-                        {models.length ? models.join(", ") : "No routed models"}
+                        {models.length ? models.join(", ") : "Not synced"}
                       </TableCell>
                       <TableCell>
                         <StatusBadge
@@ -235,9 +307,14 @@ export function OrganizationProvidersPage() {
                         <Button
                           size="sm"
                           variant="outline"
-                          onClick={() => check(provider)}
+                          disabled={!canWrite || checking || ready}
+                          onClick={() => void syncProvider(provider.id)}
                         >
-                          Check health
+                          {checking
+                            ? "Checking…"
+                            : ready
+                              ? "Ready"
+                              : "Retry setup"}
                         </Button>
                       </TableCell>
                     </TableRow>
@@ -280,6 +357,7 @@ export function OrganizationProvidersPage() {
                     <SelectValue />
                   </SelectTrigger>
                   <SelectContent>
+                    <SelectItem value="openai">OpenAI</SelectItem>
                     <SelectItem value="openai_compatible">
                       OpenAI-compatible
                     </SelectItem>
@@ -290,7 +368,14 @@ export function OrganizationProvidersPage() {
               </Field>
               <Field>
                 <FieldLabel htmlFor="provider-url">Base URL</FieldLabel>
-                <Input id="provider-url" name="base_url" type="url" required />
+                <Input
+                  id="provider-url"
+                  name="base_url"
+                  type="url"
+                  placeholder="OpenAI uses https://api.openai.com/v1/"
+                  defaultValue="https://api.openai.com/v1/"
+                  required
+                />
               </Field>
               <Field>
                 <FieldLabel htmlFor="provider-credential">
@@ -408,6 +493,7 @@ type UsageSummary = {
   output_tokens?: number
   total_tokens?: number
   estimated_cost?: number
+  unpriced_requests?: number
   success_rate?: number
 }
 
@@ -496,7 +582,11 @@ export function OrganizationUsagePage() {
           <Metric
             label="Estimated cost"
             value={`$${Number(values.estimated_cost ?? 0).toFixed(4)}`}
-            detail="Provider cost"
+            detail={
+              Number(values.unpriced_requests ?? 0) > 0
+                ? `${Number(values.unpriced_requests).toLocaleString()} requests unpriced`
+                : "Provider cost"
+            }
           />
           <Metric
             label="Success rate"
@@ -770,15 +860,17 @@ type ManagedBillingStatus = {
     [key: string]: number
   }
   limits: {
-    routed_tokens_per_month: number
-    projects: number
-    members: number
-    active_api_keys: number
-    providers: number
-    requests_per_minute: number
-    history_days: number
-    fallback_targets: number
-    mcp_servers: number
+    routed_tokens_per_month: number | null
+    projects: number | null
+    members: number | null
+    active_api_keys: number | null
+    providers: number | null
+    requests_per_minute: number | null
+    history_days: number | null
+    fallback_targets: number | null
+    mcp_servers: number | null
+    budget_rules: number | null
+    security_patterns: number | null
   }
   features: Record<string, boolean | string>
   overages: string[]
@@ -796,11 +888,18 @@ type BillingCatalog = {
     interval: "monthly" | "annual"
     price: number
     currency: string
+    coming_soon_features: string[]
     profile: {
       limits: ManagedBillingStatus["limits"]
       features: ManagedBillingStatus["features"]
     }
   }[]
+}
+
+function formatPlanLimit(value: number | null | undefined) {
+  if (value === null) return "Unlimited"
+  if (value === undefined) return "—"
+  return value.toLocaleString()
 }
 
 export function OrganizationBillingPage() {
@@ -817,10 +916,14 @@ export function OrganizationBillingPage() {
   const catalog = useGatewayData<BillingCatalog>("/commercial/billing/catalog")
   const billing = overview.data
   const [commercialPending, setCommercialPending] = React.useState(false)
+  const [planConfirmation, setPlanConfirmation] = React.useState<
+    "core" | "pro" | null
+  >(null)
   const [interval, setInterval] = React.useState<"monthly" | "annual">(
     managed.data?.interval ?? "monthly"
   )
   const canManage = gatewayAdmin || ["owner", "admin"].includes(tenantRole)
+  const routedTokenLimit = managed.data?.limits.routed_tokens_per_month
 
   async function openCommercialBilling(
     action: "checkout" | "portal",
@@ -866,6 +969,7 @@ export function OrganizationBillingPage() {
         }
       )
       toast.success("Plan change submitted. Billing will update shortly.")
+      setPlanConfirmation(null)
       managed.reload()
     } catch (error) {
       toast.error(error instanceof Error ? error.message : "Plan change failed")
@@ -924,20 +1028,21 @@ export function OrganizationBillingPage() {
                 {Number(
                   managed.data?.usage.routed_tokens_this_month ?? 0
                 ).toLocaleString()}{" "}
-                of{" "}
-                {Number(
-                  managed.data?.limits.routed_tokens_per_month ?? 0
-                ).toLocaleString()}{" "}
                 routed tokens this month
+                {routedTokenLimit === null
+                  ? " · Unlimited plan"
+                  : ` of ${Number(routedTokenLimit ?? 0).toLocaleString()}`}
               </p>
-              <div className="mt-2 h-2 w-64 max-w-full overflow-hidden rounded-full bg-muted">
-                <div
-                  className="h-full bg-primary"
-                  style={{
-                    width: `${Math.min(100, ((managed.data?.usage.routed_tokens_this_month ?? 0) / Math.max(1, managed.data?.limits.routed_tokens_per_month ?? 1)) * 100)}%`,
-                  }}
-                />
-              </div>
+              {routedTokenLimit !== null && (
+                <div className="mt-2 h-2 w-64 max-w-full overflow-hidden rounded-full bg-muted">
+                  <div
+                    className="h-full bg-primary"
+                    style={{
+                      width: `${Math.min(100, ((managed.data?.usage.routed_tokens_this_month ?? 0) / Math.max(1, routedTokenLimit ?? 1)) * 100)}%`,
+                    }}
+                  />
+                </div>
+              )}
             </div>
             <div className="flex rounded-md border p-1">
               {(["monthly", "annual"] as const).map((value) => (
@@ -969,7 +1074,9 @@ export function OrganizationBillingPage() {
               )
               const profile =
                 tier === "free" ? catalog.data?.free : paid?.profile
-              const selected = managed.data?.tier === tier
+              const selected =
+                managed.data?.tier === tier &&
+                (tier === "free" || managed.data?.interval === interval)
               const price = paid
                 ? new Intl.NumberFormat(undefined, {
                     style: "currency",
@@ -996,27 +1103,44 @@ export function OrganizationBillingPage() {
                   <CardContent>
                     <ul className="mb-5 space-y-1 text-sm text-muted-foreground">
                       <li>
-                        {profile?.limits.projects ?? 0} projects ·{" "}
-                        {profile?.limits.members ?? 0} seats
+                        {formatPlanLimit(profile?.limits.projects)} projects ·{" "}
+                        {formatPlanLimit(profile?.limits.members)} seats
                       </li>
                       <li>
-                        {profile?.limits.active_api_keys ?? 0} API keys ·{" "}
-                        {profile?.limits.providers ?? 0} providers
+                        {formatPlanLimit(profile?.limits.active_api_keys)}{" "}
+                        active API key devices / credentials ·{" "}
+                        {formatPlanLimit(profile?.limits.providers)} providers
                       </li>
                       <li>
-                        {Number(
-                          profile?.limits.routed_tokens_per_month ?? 0
-                        ).toLocaleString()}{" "}
-                        tokens / month
+                        {formatPlanLimit(
+                          profile?.limits.routed_tokens_per_month
+                        )}{" "}
+                        routed tokens / month
                       </li>
                       <li>
-                        {profile?.limits.requests_per_minute ?? 0} requests /
-                        minute · {profile?.limits.history_days ?? 0}-day history
+                        {formatPlanLimit(profile?.limits.requests_per_minute)}{" "}
+                        requests / minute ·{" "}
+                        {formatPlanLimit(profile?.limits.history_days)}-day
+                        history
                       </li>
                       <li>
-                        {profile?.limits.mcp_servers ?? 0} MCP servers ·{" "}
-                        {profile?.limits.fallback_targets ?? 0} fallbacks
+                        {formatPlanLimit(profile?.limits.mcp_servers)} MCP
+                        servers ·{" "}
+                        {formatPlanLimit(profile?.limits.fallback_targets)}{" "}
+                        fallbacks
                       </li>
+                      <li>
+                        {formatPlanLimit(profile?.limits.budget_rules)} budget /
+                        quota rules ·{" "}
+                        {formatPlanLimit(profile?.limits.security_patterns)}{" "}
+                        security patterns
+                      </li>
+                      {paid?.coming_soon_features.includes("custom_domain") && (
+                        <li className="flex items-center gap-2">
+                          Custom Domain
+                          <Badge variant="outline">Coming Soon</Badge>
+                        </li>
+                      )}
                     </ul>
                     {selected ? (
                       <Badge variant="secondary">Current plan</Badge>
@@ -1026,7 +1150,7 @@ export function OrganizationBillingPage() {
                         disabled={commercialPending}
                         onClick={() =>
                           void (managed.data?.configured
-                            ? changeCommercialPlan(tier)
+                            ? setPlanConfirmation(tier)
                             : openCommercialBilling("checkout", tier))
                         }
                       >
@@ -1044,6 +1168,46 @@ export function OrganizationBillingPage() {
               )
             })}
           </div>
+          <Dialog
+            open={planConfirmation !== null}
+            onOpenChange={(open) => {
+              if (!open && !commercialPending) setPlanConfirmation(null)
+            }}
+          >
+            <DialogContent>
+              <DialogHeader>
+                <DialogTitle>Confirm plan change</DialogTitle>
+                <DialogDescription>
+                  Change from {managed.data?.tier ?? "free"} to{" "}
+                  {planConfirmation ?? "the selected plan"} on the {interval}{" "}
+                  billing interval. Lemon Squeezy will apply its standard
+                  proration and charge or credit the payment method on file.
+                </DialogDescription>
+              </DialogHeader>
+              <div className="rounded-lg border bg-muted/30 p-4 text-sm">
+                This submits the subscription change immediately. You can review
+                invoices and payment details in the customer portal.
+              </div>
+              <DialogFooter>
+                <Button
+                  variant="outline"
+                  disabled={commercialPending}
+                  onClick={() => setPlanConfirmation(null)}
+                >
+                  Cancel
+                </Button>
+                <Button
+                  disabled={commercialPending || planConfirmation === null}
+                  onClick={() => {
+                    if (planConfirmation)
+                      void changeCommercialPlan(planConfirmation)
+                  }}
+                >
+                  {commercialPending ? "Changing plan…" : "Confirm change"}
+                </Button>
+              </DialogFooter>
+            </DialogContent>
+          </Dialog>
         </DataState>
       )}
       {edition !== "managed" && (

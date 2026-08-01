@@ -49,6 +49,13 @@ impl GatewayStore for MemoryStore {
         Ok(self.state.lock().await.tenants.get(tenant_id).cloned())
     }
 
+    async fn project_for_endpoint(
+        &self,
+        _endpoint_id: &str,
+    ) -> Result<Option<(String, String)>, StoreError> {
+        Ok(None)
+    }
+
     async fn plan_requests_per_minute(&self, _tenant_id: &str) -> Result<Option<u64>, StoreError> {
         Ok(None)
     }

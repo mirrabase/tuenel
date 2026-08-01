@@ -310,6 +310,18 @@ pub enum UsageStatus {
     Interrupted,
 }
 
+/// Whether a usage event had an exact model price at execution time.
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum PricingStatus {
+    /// A provider/model price was active for the event.
+    Priced,
+    /// No active provider/model price existed.
+    Unpriced,
+    /// Compatibility price from the process-wide legacy configuration.
+    LegacyEstimate,
+}
+
 /// Immutable usage ledger entry.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct UsageEvent {
@@ -335,6 +347,8 @@ pub struct UsageEvent {
     pub usage: TokenUsage,
     /// Estimated USD cost.
     pub estimated_cost: Decimal,
+    /// Source and reliability of the cost value.
+    pub pricing_status: PricingStatus,
     /// Request outcome.
     pub status: UsageStatus,
     /// End-to-end attempt latency when observed.

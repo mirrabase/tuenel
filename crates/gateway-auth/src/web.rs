@@ -76,6 +76,57 @@ pub struct Membership {
     pub role: TenantRole,
 }
 
+#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum OnboardingDisplay {
+    Expanded,
+    Collapsed,
+}
+
+#[derive(Clone, Debug)]
+pub struct OnboardingFacts {
+    pub auto_open: bool,
+    pub seen_at: Option<DateTime<Utc>>,
+    pub collapsed_at: Option<DateTime<Utc>>,
+    pub project_id: Option<String>,
+    pub project_ready: bool,
+    pub provider_ready: bool,
+    pub route_ready: bool,
+    pub api_key_ready: bool,
+    pub first_request_ready: bool,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum OnboardingStepStatus {
+    Complete,
+    Current,
+    Pending,
+    Blocked,
+    NeedsAdmin,
+}
+
+#[derive(Clone, Debug, Serialize)]
+pub struct OnboardingStep {
+    pub id: &'static str,
+    pub status: OnboardingStepStatus,
+}
+
+#[derive(Clone, Debug, Serialize)]
+pub struct OnboardingProgress {
+    pub version: u8,
+    pub auto_open: bool,
+    pub seen: bool,
+    pub display: OnboardingDisplay,
+    pub can_configure: bool,
+    pub can_test: bool,
+    pub project_id: Option<String>,
+    pub completed_steps: usize,
+    pub total_steps: usize,
+    pub complete: bool,
+    pub steps: Vec<OnboardingStep>,
+}
+
 #[derive(Clone, Debug)]
 pub struct Signup {
     pub email: String,
@@ -341,6 +392,18 @@ pub trait IdentityRepository: Send + Sync {
         role: TenantRole,
     ) -> Result<(), WebAuthError>;
     async fn remove_member(&self, tenant_id: Uuid, user_id: Uuid) -> Result<(), WebAuthError>;
+    async fn onboarding_facts(
+        &self,
+        tenant_id: Uuid,
+        user_id: Uuid,
+        project_id: Option<&str>,
+    ) -> Result<OnboardingFacts, WebAuthError>;
+    async fn update_onboarding_display(
+        &self,
+        tenant_id: Uuid,
+        user_id: Uuid,
+        display: OnboardingDisplay,
+    ) -> Result<(), WebAuthError>;
 }
 
 #[derive(Clone)]
@@ -609,6 +672,53 @@ impl WebAuthService {
         self.repository
             .create_tenant(session.user_id, Uuid::now_v7(), tenant_name)
             .await
+    }
+
+    pub async fn onboarding(
+        &self,
+        credential: &str,
+        project_id: Option<&str>,
+    ) -> Result<OnboardingProgress, WebAuthError> {
+        let principal = self.authenticate(credential).await?;
+        let tenant_id = parse_tenant(&principal.tenant_id)?;
+        let user_id = principal
+            .user_id
+            .as_deref()
+            .and_then(|id| Uuid::parse_str(id).ok())
+            .ok_or(WebAuthError::Forbidden)?;
+        let facts = self
+            .repository
+            .onboarding_facts(tenant_id, user_id, project_id)
+            .await?;
+        let can_configure = principal
+            .roles
+            .iter()
+            .any(|role| matches!(role.as_str(), "owner" | "admin" | "gateway_admin"));
+        let can_test = principal.roles.iter().any(|role| {
+            matches!(
+                role.as_str(),
+                "owner" | "admin" | "engineer" | "gateway_admin"
+            )
+        });
+        Ok(onboarding_progress(facts, can_configure, can_test))
+    }
+
+    pub async fn update_onboarding_display(
+        &self,
+        credential: &str,
+        display: OnboardingDisplay,
+    ) -> Result<OnboardingProgress, WebAuthError> {
+        let principal = self.authenticate(credential).await?;
+        let tenant_id = parse_tenant(&principal.tenant_id)?;
+        let user_id = principal
+            .user_id
+            .as_deref()
+            .and_then(|id| Uuid::parse_str(id).ok())
+            .ok_or(WebAuthError::Forbidden)?;
+        self.repository
+            .update_onboarding_display(tenant_id, user_id, display)
+            .await?;
+        self.onboarding(credential, None).await
     }
 
     pub async fn invite(
@@ -964,6 +1074,63 @@ fn expires_at(ttl: Duration) -> DateTime<Utc> {
     Utc::now() + chrono::Duration::from_std(ttl).expect("session TTL fits chrono")
 }
 
+fn onboarding_progress(
+    facts: OnboardingFacts,
+    can_configure: bool,
+    can_test: bool,
+) -> OnboardingProgress {
+    const IDS: [&str; 5] = [
+        "create_project",
+        "connect_provider",
+        "create_route",
+        "create_api_key",
+        "send_first_request",
+    ];
+    let completed = [
+        facts.project_ready,
+        facts.provider_ready,
+        facts.route_ready,
+        facts.api_key_ready,
+        facts.first_request_ready,
+    ];
+    let all_complete = completed.into_iter().all(|ready| ready);
+    let current = completed.iter().position(|ready| !ready);
+    let mut steps = Vec::with_capacity(IDS.len());
+    for (index, id) in IDS.iter().enumerate() {
+        let status = if completed[index] {
+            OnboardingStepStatus::Complete
+        } else if current == Some(index) {
+            if can_configure || (index == 4 && can_test) {
+                OnboardingStepStatus::Current
+            } else {
+                OnboardingStepStatus::NeedsAdmin
+            }
+        } else if current.is_some_and(|current| index > current) {
+            OnboardingStepStatus::Blocked
+        } else {
+            OnboardingStepStatus::Pending
+        };
+        steps.push(OnboardingStep { id, status });
+    }
+    OnboardingProgress {
+        version: 1,
+        auto_open: facts.auto_open && facts.seen_at.is_none() && !all_complete,
+        seen: facts.seen_at.is_some(),
+        display: if facts.collapsed_at.is_some() || (!facts.auto_open && facts.seen_at.is_none()) {
+            OnboardingDisplay::Collapsed
+        } else {
+            OnboardingDisplay::Expanded
+        },
+        can_configure,
+        can_test,
+        project_id: facts.project_id,
+        completed_steps: completed.into_iter().filter(|ready| *ready).count(),
+        total_steps: completed.len(),
+        complete: all_complete,
+        steps,
+    }
+}
+
 #[derive(Clone, Debug, Error)]
 pub enum WebAuthError {
     #[error("invalid authentication input")]
@@ -996,7 +1163,8 @@ mod tests {
     use uuid::Uuid;
 
     use super::{
-        new_session, normalize_email, parse_credential, token_hash, valid_bootstrap_token,
+        OnboardingDisplay, OnboardingFacts, OnboardingStepStatus, new_session, normalize_email,
+        onboarding_progress, parse_credential, token_hash, valid_bootstrap_token,
         validate_tenant_name,
     };
 
@@ -1033,5 +1201,30 @@ mod tests {
             &expected,
             "tb_ffffffffffffffffffffffffffffffff"
         ));
+    }
+
+    #[test]
+    fn onboarding_is_ordered_and_read_only_users_need_an_admin() {
+        let progress = onboarding_progress(
+            OnboardingFacts {
+                auto_open: true,
+                seen_at: None,
+                collapsed_at: None,
+                project_id: Some("project".into()),
+                project_ready: true,
+                provider_ready: false,
+                route_ready: false,
+                api_key_ready: false,
+                first_request_ready: false,
+            },
+            false,
+            false,
+        );
+        assert!(progress.auto_open);
+        assert_eq!(progress.display, OnboardingDisplay::Expanded);
+        assert_eq!(progress.completed_steps, 1);
+        assert_eq!(progress.steps[0].status, OnboardingStepStatus::Complete);
+        assert_eq!(progress.steps[1].status, OnboardingStepStatus::NeedsAdmin);
+        assert_eq!(progress.steps[2].status, OnboardingStepStatus::Blocked);
     }
 }

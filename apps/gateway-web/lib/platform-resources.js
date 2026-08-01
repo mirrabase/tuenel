@@ -70,12 +70,15 @@ export function buildResourcePayload(
       const providerType = required(data, "provider_type", "Provider type")
       const credential = text(data, "credential")
       if (!editing && providerType !== "openai_compatible" && !credential)
-        throw new Error("Credential is required for Anthropic and Gemini")
+        throw new Error("Credential is required for this provider")
       return compact({
         id: editing ? undefined : required(data, "id", "Provider ID"),
         name: required(data, "name", "Name"),
         provider_type: providerType,
-        base_url: required(data, "base_url", "Base URL"),
+        base_url:
+          providerType === "openai"
+            ? "https://api.openai.com/v1/"
+            : required(data, "base_url", "Base URL"),
         credential: credential || undefined,
       })
     }

@@ -116,12 +116,20 @@ export function ProvidersPage() {
   const health = useGatewayData<Row>(
     `/admin/system?tenant_id=${encodeURIComponent(session.tenantId)}`
   )
+  const prices = useGatewayData<Page<Row>>(
+    `/admin/model-prices?tenant_id=${encodeURIComponent(session.tenantId)}`
+  )
   const [editor, setEditor] = React.useState<Provider>()
   const [credentialEditor, setCredentialEditor] = React.useState<Provider>()
   const [modelProvider, setModelProvider] = React.useState<Provider>()
   const [models, setModels] = React.useState<string[]>([])
   const [modelsLoading, setModelsLoading] = React.useState(false)
   const [modelsError, setModelsError] = React.useState("")
+  const [pricingModel, setPricingModel] = React.useState<{
+    provider: Provider
+    model: string
+    price?: Row
+  }>()
   const [disabling, setDisabling] = React.useState<Provider>()
   const [pending, setPending] = React.useState(false)
   const canWrite =
@@ -189,13 +197,17 @@ export function ProvidersPage() {
     event.preventDefault()
     if (!activeEditor) return
     const form = new FormData(event.currentTarget)
+    const providerType = String(form.get("provider_type"))
     const saved = await update(
       activeEditor,
       {
         ...providerPayload(activeEditor),
         name: form.get("name"),
-        provider_type: form.get("provider_type"),
-        base_url: form.get("base_url"),
+        provider_type: providerType,
+        base_url:
+          providerType === "openai"
+            ? "https://api.openai.com/v1/"
+            : form.get("base_url"),
       },
       "Provider configured"
     )
@@ -231,6 +243,7 @@ export function ProvidersPage() {
         session.tenantId
       )
       setModels(result.data.map((model) => model.id))
+      providers.reload()
     } catch (error) {
       setModelsError(
         error instanceof Error ? error.message : "Provider models unavailable"
@@ -248,6 +261,40 @@ export function ProvidersPage() {
       "Provider disabled"
     )
     if (saved) setDisabling(undefined)
+  }
+
+  async function savePricing(event: React.FormEvent<HTMLFormElement>) {
+    event.preventDefault()
+    if (!pricingModel) return
+    const form = new FormData(event.currentTarget)
+    setPending(true)
+    try {
+      await gatewayFetch("/admin/model-prices", session.tenantId, {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({
+          tenant_id: session.tenantId,
+          provider_id: pricingModel.provider.id,
+          upstream_model: pricingModel.model,
+          input_cost_per_million: Number(form.get("input_cost_per_million")),
+          output_cost_per_million: Number(form.get("output_cost_per_million")),
+          cached_input_cost_per_million:
+            form.get("cached_input_cost_per_million") === ""
+              ? undefined
+              : Number(form.get("cached_input_cost_per_million")),
+          effective_from: new Date().toISOString(),
+        }),
+      })
+      prices.reload()
+      setPricingModel(undefined)
+      toast.success("Model pricing saved")
+    } catch (error) {
+      toast.error(
+        error instanceof Error ? error.message : "Pricing save failed"
+      )
+    } finally {
+      setPending(false)
+    }
   }
 
   return (
@@ -412,6 +459,7 @@ export function ProvidersPage() {
                       <SelectValue />
                     </SelectTrigger>
                     <SelectContent>
+                      <SelectItem value="openai">OpenAI</SelectItem>
                       <SelectItem value="openai_compatible">
                         OpenAI-compatible
                       </SelectItem>
@@ -499,17 +547,113 @@ export function ProvidersPage() {
             <p className="text-sm text-destructive">{modelsError}</p>
           ) : models.length ? (
             <ul className="max-h-80 space-y-2 overflow-y-auto text-sm">
-              {models.map((model) => (
-                <li key={model} className="rounded-md border px-3 py-2">
-                  {model}
-                </li>
-              ))}
+              {models.map((model) => {
+                const price = prices.data?.data.find(
+                  (entry) =>
+                    value(entry.provider_id, "") === modelProvider?.id &&
+                    value(entry.upstream_model, "") === model
+                )
+                return (
+                  <li
+                    key={model}
+                    className="flex items-center justify-between gap-3 rounded-md border px-3 py-2"
+                  >
+                    <div>
+                      <p className="font-mono">{model}</p>
+                      <p className="text-xs text-muted-foreground">
+                        {price
+                          ? `$${value(price.input_cost_per_million)} input / $${value(price.output_cost_per_million)} output per 1M`
+                          : "Unpriced"}
+                      </p>
+                    </div>
+                    {canWrite && modelProvider && (
+                      <Button
+                        size="sm"
+                        variant="outline"
+                        onClick={() =>
+                          setPricingModel({
+                            provider: modelProvider,
+                            model,
+                            price,
+                          })
+                        }
+                      >
+                        {price ? "Update price" : "Set price"}
+                      </Button>
+                    )}
+                  </li>
+                )
+              })}
             </ul>
           ) : (
             <p className="text-sm text-muted-foreground">
               No models were reported.
             </p>
           )}
+        </DialogContent>
+      </Dialog>
+
+      <Dialog
+        open={Boolean(pricingModel)}
+        onOpenChange={(open) => !open && !pending && setPricingModel(undefined)}
+      >
+        <DialogContent>
+          <DialogHeader>
+            <DialogTitle>Model pricing</DialogTitle>
+            <DialogDescription>
+              USD cost per one million tokens for {pricingModel?.model}.
+            </DialogDescription>
+          </DialogHeader>
+          <form onSubmit={savePricing}>
+            <FieldGroup>
+              <Field>
+                <FieldLabel>Input cost / 1M tokens</FieldLabel>
+                <Input
+                  name="input_cost_per_million"
+                  type="number"
+                  min={0}
+                  step="any"
+                  defaultValue={value(
+                    pricingModel?.price?.input_cost_per_million,
+                    ""
+                  )}
+                  required
+                />
+              </Field>
+              <Field>
+                <FieldLabel>Output cost / 1M tokens</FieldLabel>
+                <Input
+                  name="output_cost_per_million"
+                  type="number"
+                  min={0}
+                  step="any"
+                  defaultValue={value(
+                    pricingModel?.price?.output_cost_per_million,
+                    ""
+                  )}
+                  required
+                />
+              </Field>
+              <Field>
+                <FieldLabel>Cached input cost / 1M tokens</FieldLabel>
+                <Input
+                  name="cached_input_cost_per_million"
+                  type="number"
+                  min={0}
+                  step="any"
+                  defaultValue={value(
+                    pricingModel?.price?.cached_input_cost_per_million,
+                    ""
+                  )}
+                />
+              </Field>
+              <DialogFooter>
+                <Button type="submit" disabled={pending}>
+                  {pending ? "Saving…" : "Save pricing"}
+                </Button>
+              </DialogFooter>
+            </FieldGroup>
+          </form>
         </DialogContent>
       </Dialog>
 

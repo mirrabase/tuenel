@@ -98,6 +98,10 @@ pub fn retryable(error: &ProviderError) -> bool {
             | ProviderError::Transport
             | ProviderError::RateLimited
             | ProviderError::Upstream(500..=599)
+            | ProviderError::UpstreamRejected {
+                status: 500..=599,
+                ..
+            }
     )
 }
 

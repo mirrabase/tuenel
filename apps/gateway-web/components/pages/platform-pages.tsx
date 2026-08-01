@@ -518,6 +518,7 @@ function ProviderForm({ record }: { record?: RecordValue }) {
         value={providerType}
         onValueChange={(value) => value && setProviderType(value)}
         options={[
+          ["openai", "OpenAI"],
           ["openai_compatible", "OpenAI-compatible"],
           ["anthropic", "Anthropic"],
           ["gemini", "Gemini"],

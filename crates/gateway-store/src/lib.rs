@@ -24,6 +24,11 @@ pub trait GatewayStore: Send + Sync {
     async fn insert_tenant(&self, tenant: TenantRecord) -> Result<(), StoreError>;
     /// Find a tenant.
     async fn find_tenant(&self, tenant_id: &str) -> Result<Option<TenantRecord>, StoreError>;
+    /// Resolve an opaque project endpoint label to its tenant and project.
+    async fn project_for_endpoint(
+        &self,
+        endpoint_id: &str,
+    ) -> Result<Option<(String, String)>, StoreError>;
     /// Managed tenant-wide RPM ceiling. Self-hosted tenants return `None`.
     async fn plan_requests_per_minute(&self, tenant_id: &str) -> Result<Option<u64>, StoreError>;
     /// Current usage and ceiling for a managed resource, if this tenant is managed.

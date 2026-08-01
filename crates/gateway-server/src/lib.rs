@@ -18,8 +18,8 @@ use axum::{
 use chrono::{DateTime, Utc};
 use futures::StreamExt;
 use gateway_auth::{
-    AuthError, Authenticator, Bootstrap, LoginResult, OrganizationUpdate, Signup, WebAuthError,
-    WebAuthService,
+    AuthError, Authenticator, Bootstrap, LoginResult, OnboardingDisplay, OrganizationUpdate,
+    Signup, WebAuthError, WebAuthService,
 };
 use gateway_core::{GatewayError, GatewayRuntime};
 use gateway_entitlements::{
@@ -129,6 +129,10 @@ pub fn router(state: AppState) -> Router {
             axum::routing::patch(update_member).delete(remove_member),
         )
         .route(
+            "/auth/tenants/{tenant_id}/onboarding",
+            get(onboarding).patch(update_onboarding),
+        )
+        .route(
             "/auth/tenants/{tenant_id}",
             get(organization)
                 .patch(update_organization)
@@ -207,6 +211,7 @@ fn v03_openapi_paths() -> Vec<(&'static str, &'static [&'static str])> {
         ("/admin/tenants", &["get"]),
         ("/auth/capabilities", &["get"]),
         ("/auth/tenants/{tenant_id}/capabilities", &["get"]),
+        ("/auth/tenants/{tenant_id}/onboarding", &["get", "patch"]),
         ("/admin/projects", &["get", "post"]),
         ("/admin/projects/{id}", &["patch", "delete"]),
         ("/auth/tenants/{tenant_id}/members", &["get"]),
@@ -223,7 +228,7 @@ fn v03_openapi_paths() -> Vec<(&'static str, &'static [&'static str])> {
         ("/admin/virtual-keys", &["get", "post"]),
         ("/admin/providers", &["get", "post"]),
         ("/admin/providers/{id}", &["patch", "delete"]),
-        ("/admin/providers/{id}/models", &["get"]),
+        ("/admin/providers/{id}/models", &["get", "post"]),
         ("/admin/providers/{id}/check", &["post"]),
         ("/admin/model-routes", &["get", "post"]),
         ("/admin/model-routes/{id}", &["patch", "delete"]),
@@ -567,6 +572,45 @@ async fn organization(
         .organization(tenant_credential(&headers, tenant_id)?)
         .await
         .map(|organization| Json(json!(organization)))
+        .map_err(map_web_auth)
+}
+
+#[derive(Debug, Deserialize)]
+struct OnboardingQuery {
+    project_id: Option<String>,
+}
+
+#[derive(Debug, Deserialize)]
+struct OnboardingUpdate {
+    display: OnboardingDisplay,
+}
+
+async fn onboarding(
+    State(state): State<AppState>,
+    Path(tenant_id): Path<Uuid>,
+    Query(query): Query<OnboardingQuery>,
+    headers: HeaderMap,
+) -> Result<Json<Value>, ApiError> {
+    web_auth(&state)?
+        .onboarding(
+            tenant_credential(&headers, tenant_id)?,
+            query.project_id.as_deref(),
+        )
+        .await
+        .map(|progress| Json(json!(progress)))
+        .map_err(map_web_auth)
+}
+
+async fn update_onboarding(
+    State(state): State<AppState>,
+    Path(tenant_id): Path<Uuid>,
+    headers: HeaderMap,
+    Json(input): Json<OnboardingUpdate>,
+) -> Result<Json<Value>, ApiError> {
+    web_auth(&state)?
+        .update_onboarding_display(tenant_credential(&headers, tenant_id)?, input.display)
+        .await
+        .map(|progress| Json(json!(progress)))
         .map_err(map_web_auth)
 }
 
@@ -960,6 +1004,19 @@ struct KeyScopeQuery {
 }
 
 async fn authenticate(state: &AppState, headers: &HeaderMap) -> Result<Principal, ApiError> {
+    let endpoint = project_endpoint(headers);
+    let endpoint_scope = if let Some(endpoint) = endpoint.as_deref() {
+        Some(
+            state
+                .store
+                .project_for_endpoint(endpoint)
+                .await
+                .map_err(|_| ApiError::service_unavailable("project endpoint lookup unavailable"))?
+                .ok_or_else(|| ApiError::not_found("project endpoint not found"))?,
+        )
+    } else {
+        None
+    };
     let credential = bearer_credential(headers)?;
     let principal =
         state
@@ -973,7 +1030,31 @@ async fn authenticate(state: &AppState, headers: &HeaderMap) -> Result<Principal
                 }
                 AuthError::Invalid => ApiError::unauthorized(),
             })?;
-    bind_project(principal, headers)
+    let principal = bind_project(principal, headers)?;
+    if let Some((tenant_id, project_id)) = endpoint_scope {
+        if principal.tenant_id != tenant_id || principal.project_id.as_deref() != Some(&project_id)
+        {
+            return Err(ApiError::forbidden(
+                "credential is not valid for this project endpoint",
+            ));
+        }
+    }
+    Ok(principal)
+}
+
+fn project_endpoint(headers: &HeaderMap) -> Option<String> {
+    let host = headers
+        .get(axum::http::header::HOST)?
+        .to_str()
+        .ok()?
+        .split(':')
+        .next()?
+        .to_ascii_lowercase();
+    let label = host.strip_suffix(".mirrabase.com")?;
+    (label.len() == 33
+        && label.starts_with('p')
+        && label[1..].bytes().all(|byte| byte.is_ascii_hexdigit()))
+    .then_some(label.to_owned())
 }
 
 fn bind_project(mut principal: Principal, headers: &HeaderMap) -> Result<Principal, ApiError> {
@@ -1844,6 +1925,24 @@ impl From<GatewayError> for ApiError {
                 "upstream_rate_limit",
                 "upstream rate limit exceeded",
             ),
+            GatewayError::Provider(gateway_providers::ProviderError::UpstreamRejected {
+                status,
+                code,
+            }) if status == 401 || status == 403 => Self::new(
+                StatusCode::BAD_GATEWAY,
+                "authentication_error",
+                "upstream_authentication_failed",
+                &format!("upstream authentication failed ({code})"),
+            ),
+            GatewayError::Provider(gateway_providers::ProviderError::UpstreamRejected {
+                status,
+                code,
+            }) if status == 400 || status == 404 || status == 422 => Self::new(
+                StatusCode::BAD_GATEWAY,
+                "invalid_request_error",
+                "upstream_invalid_request",
+                &format!("upstream rejected the request ({code})"),
+            ),
             GatewayError::Provider(_) => Self::new(
                 StatusCode::BAD_GATEWAY,
                 "server_error",
@@ -1869,6 +1968,7 @@ mod tests {
 
     use super::{
         ChatCompletionRequest, StopInput, bind_project, ensure_principal_tenant, openapi_document,
+        project_endpoint,
     };
 
     #[test]
@@ -1918,5 +2018,29 @@ mod tests {
         );
         let other_tenant = "01900000-0000-7000-8000-000000000003".parse().unwrap();
         assert!(ensure_principal_tenant(&principal, other_tenant).is_err());
+    }
+
+    #[test]
+    fn recognizes_only_canonical_project_endpoint_hosts() {
+        let mut headers = HeaderMap::new();
+        headers.insert(
+            "host",
+            "p0123456789abcdef0123456789abcdef.mirrabase.com:443"
+                .parse()
+                .unwrap(),
+        );
+        assert_eq!(
+            project_endpoint(&headers).as_deref(),
+            Some("p0123456789abcdef0123456789abcdef")
+        );
+        headers.insert("host", "random.mirrabase.com".parse().unwrap());
+        assert_eq!(project_endpoint(&headers), None);
+        headers.insert(
+            "host",
+            "p0123456789abcdef0123456789abcdeg.mirrabase.com"
+                .parse()
+                .unwrap(),
+        );
+        assert_eq!(project_endpoint(&headers), None);
     }
 }

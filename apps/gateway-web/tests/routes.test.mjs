@@ -474,3 +474,106 @@ test("operator mutations use dedicated forms instead of raw JSON", () => {
   ])
     assert.match(source, new RegExp(`function ${form}`))
 })
+
+test("billing is managed-only in navigation and server routing", () => {
+  const shell = readFileSync(join(root, "components/console-shell.tsx"), "utf8")
+  const page = readFileSync(
+    join(root, "app/[locale]/[tenantId]/[[...slug]]/page.tsx"),
+    "utf8"
+  )
+  assert.match(shell, /item\.path !== ["']\/billing["']/)
+  assert.match(shell, /session\.edition === ["']managed["']/)
+  assert.match(page, /kind === ["']organization-billing["']/)
+  assert.match(page, /getTenantCapabilities\(tenantId\)/)
+  assert.match(page, /edition !== ["']managed["']/)
+  assert.match(page, /notFound\(\)/)
+})
+
+test("managed billing renders unlimited values and roadmap features truthfully", () => {
+  const billing = readFileSync(
+    join(root, "components/pages/organization-pages.tsx"),
+    "utf8"
+  )
+  const shell = readFileSync(join(root, "components/console-shell.tsx"), "utf8")
+  assert.match(billing, /if \(value === null\) return ["']Unlimited["']/)
+  assert.match(billing, /routedTokenLimit !== null/)
+  assert.match(billing, /API key devices \/ credentials/)
+  assert.match(billing, /custom_domain/)
+  assert.match(billing, /Coming Soon/)
+  assert.match(billing, /Confirm plan change/)
+  assert.match(billing, /standard\s+proration/)
+  assert.match(billing, /setPlanConfirmation\(tier\)/)
+  assert.match(shell, /Unlimited plan/)
+})
+
+test("providers discover upstream models before routes and expose explicit pricing", () => {
+  const providers = readFileSync(
+    join(root, "components/pages/providers-page.tsx"),
+    "utf8"
+  )
+  const organization = readFileSync(
+    join(root, "components/pages/organization-pages.tsx"),
+    "utf8"
+  )
+  assert.match(providers, /provider\.id\)\}\/models/)
+  assert.match(providers, /Unpriced/)
+  assert.match(providers, /Set price/)
+  assert.match(providers, /input_cost_per_million/)
+  assert.match(organization, /available_models/)
+  assert.match(
+    organization,
+    /monitorProvider\(String\(form\.get\(["']id["']\)\)\)/
+  )
+  assert.match(organization, /Verifying health and models automatically/)
+  assert.doesNotMatch(organization, />\s*Check health\s*</)
+})
+
+test("new organizations get an ordered durable setup guide", () => {
+  const shell = readFileSync(join(root, "components/console-shell.tsx"), "utf8")
+  const guide = readFileSync(
+    join(root, "components/onboarding-guide.tsx"),
+    "utf8"
+  )
+  const gatewayPolicy = readFileSync(
+    join(root, "lib/gateway-route-policy.ts"),
+    "utf8"
+  )
+  assert.match(shell, /<OnboardingGuide/)
+  for (const step of [
+    "create_project",
+    "connect_provider",
+    "create_route",
+    "create_api_key",
+    "send_first_request",
+  ])
+    assert.match(guide, new RegExp(step))
+  assert.match(guide, /needs_admin/)
+  assert.match(guide, /setInterval\(progress\.reload, 3000\)/)
+  assert.match(gatewayPolicy, /auth\\\/\(tenants\|invitations\)/)
+})
+
+test("one canonical logo brands metadata, auth, picker, and sidebar", () => {
+  const logo = readFileSync(join(root, "public/logo.svg"), "utf8")
+  const metadata = readFileSync(join(root, "app/layout.tsx"), "utf8")
+  const brand = readFileSync(join(root, "components/brand.tsx"), "utf8")
+  const auth = readFileSync(join(root, "components/auth-form.tsx"), "utf8")
+  const authLayout = readFileSync(
+    join(root, "app/[locale]/(auth)/layout.tsx"),
+    "utf8"
+  )
+  const picker = readFileSync(
+    join(root, "components/organization-picker.tsx"),
+    "utf8"
+  )
+  const shell = readFileSync(join(root, "components/console-shell.tsx"), "utf8")
+
+  assert.match(logo, /fill:#193cb8/)
+  assert.match(logo, /fill:#ffffff/)
+  assert.match(metadata, /icon: ["']\/logo\.svg["']/)
+  assert.match(brand, /src=["']\/logo\.svg["']/)
+  assert.match(brand, /alt=["']Tuenel logo["']/)
+  for (const source of [auth, authLayout, picker, shell])
+    assert.match(source, /<Brand/)
+  assert.equal(existsSync(join(root, "public/tuenel-logo.svg")), false)
+  assert.equal(existsSync(join(root, "app/favicon.ico")), false)
+})

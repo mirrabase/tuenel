@@ -17,6 +17,7 @@ import {
 import { Input } from "@/components/ui/input"
 import { Button } from "@/components/ui/button"
 import { gatewayFetch } from "@/lib/gateway-api"
+import { Brand } from "@/components/brand"
 
 export function OrganizationPicker({
   locale,
@@ -55,7 +56,7 @@ export function OrganizationPicker({
     <main className="mx-auto flex min-h-screen w-full max-w-6xl flex-col gap-8 p-6 sm:p-10">
       <div className="flex flex-col gap-5 sm:flex-row sm:items-end sm:justify-between">
         <div>
-          <p className="text-sm text-muted-foreground">Tuenel Gateway</p>
+          <Brand className="mb-3" size={40} />
           <h1 className="font-heading text-3xl font-semibold tracking-tight">
             Your Organizations
           </h1>

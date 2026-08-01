@@ -201,6 +201,14 @@ pub enum ProviderError {
     /// Upstream returned a non-success response.
     #[error("upstream request failed with status {0}")]
     Upstream(u16),
+    /// Upstream returned a sanitized structured error.
+    #[error("upstream request failed with status {status} ({code})")]
+    UpstreamRejected {
+        /// Upstream HTTP status.
+        status: u16,
+        /// Provider error code with credentials and free-form details removed.
+        code: String,
+    },
     /// Upstream response did not follow the supported protocol.
     #[error("upstream returned an invalid response")]
     Protocol,

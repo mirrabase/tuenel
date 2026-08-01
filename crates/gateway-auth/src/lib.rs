@@ -5,6 +5,7 @@ mod web;
 pub use web::{
     AuthAttemptLimiter, AuthCapabilities, AuthEmailKind, AuthEmailQueue, Bootstrap,
     IdentityRepository, InvitationDelivery, InvitationResult, LoginResult, Membership,
+    OnboardingDisplay, OnboardingFacts, OnboardingProgress, OnboardingStep, OnboardingStepStatus,
     Organization, OrganizationUpdate, PendingInvitation, RegistrationMode, SessionInfo, Signup,
     SignupResult, TenantRole, TrustedSessionIssuer, VerificationEmailSender, VerificationResult,
     WebAuthError, WebAuthService, WebUser,

@@ -89,6 +89,29 @@ impl GatewayStore for PostgresStore {
             .transpose()
     }
 
+    async fn project_for_endpoint(
+        &self,
+        endpoint_id: &str,
+    ) -> Result<Option<(String, String)>, StoreError> {
+        sqlx::query(
+            "SELECT tenant_id,id FROM admin_resources
+             WHERE kind='projects' AND body->>'endpoint_id'=$1
+               AND enabled=true AND retired_at IS NULL",
+        )
+        .bind(endpoint_id)
+        .fetch_optional(&self.pool)
+        .await
+        .map_err(map_sqlx)?
+        .map(|row| {
+            Ok((
+                row.try_get("tenant_id")
+                    .map_err(|_| StoreError::Unavailable)?,
+                row.try_get("id").map_err(|_| StoreError::Unavailable)?,
+            ))
+        })
+        .transpose()
+    }
+
     async fn plan_requests_per_minute(&self, tenant_id: &str) -> Result<Option<u64>, StoreError> {
         sqlx::query_scalar::<_, Option<i64>>(
             "SELECT (limits->>'requests_per_minute')::BIGINT FROM tenant_plan_profiles WHERE tenant_id=$1",
@@ -244,14 +267,15 @@ impl GatewayStore for PostgresStore {
         // A managed plan cap is tenant-wide even when callers spread traffic
         // across many virtual keys. Locking the projection row serializes the
         // usage + pending reservation check.
-        let monthly_plan_limit: Option<i64> = sqlx::query_scalar(
+        let monthly_plan_limit = sqlx::query_scalar::<_, Option<i64>>(
             "SELECT (limits->>'routed_tokens_per_month')::BIGINT FROM tenant_plan_profiles \
              WHERE tenant_id=$1 FOR UPDATE",
         )
         .bind(&reservation.tenant_id)
         .fetch_optional(&mut *transaction)
         .await
-        .map_err(map_sqlx)?;
+        .map_err(map_sqlx)?
+        .flatten();
         if let Some(monthly_plan_limit) = monthly_plan_limit {
             let used: i64 = sqlx::query_scalar(
                 "SELECT COALESCE(SUM(total_tokens),0)::BIGINT FROM usage_events \
@@ -421,13 +445,14 @@ impl GatewayStore for PostgresStore {
             "upstream_model": event.upstream_model,
             "usage": event.usage,
             "estimated_cost": event.estimated_cost,
+            "pricing_status": pricing_status_str(event.pricing_status),
             "status": status_str(event.status),
             "occurred_at": event.occurred_at,
         });
         sqlx::query(
             "INSERT INTO usage_events \
-             (event_id, request_id, tenant_id, project_id, principal_id, user_id, provider, requested_model, upstream_model, prompt_tokens, completion_tokens, total_tokens, estimated_cost, usage_estimated, status, latency_ms, occurred_at) \
-             VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17) \
+             (event_id, request_id, tenant_id, project_id, principal_id, user_id, provider, requested_model, upstream_model, prompt_tokens, completion_tokens, total_tokens, estimated_cost, pricing_status, usage_estimated, status, latency_ms, occurred_at) \
+             VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18) \
              ON CONFLICT (request_id) DO NOTHING",
         )
         .bind(event.event_id)
@@ -443,6 +468,7 @@ impl GatewayStore for PostgresStore {
         .bind(to_i64(event.usage.completion_tokens)?)
         .bind(to_i64(event.usage.total_tokens())?)
         .bind(event.estimated_cost)
+        .bind(pricing_status_str(event.pricing_status))
         .bind(event.usage.estimated)
         .bind(status_str(event.status))
         .bind(event.latency_ms.map(to_i64).transpose()?)
@@ -497,7 +523,7 @@ impl GatewayStore for PostgresStore {
     async fn usage_by_request(&self, request_id: Uuid) -> Result<Option<UsageEvent>, StoreError> {
         sqlx::query(
             "SELECT event_id, request_id, tenant_id, project_id, principal_id, user_id, provider, requested_model, \
-             upstream_model, prompt_tokens, completion_tokens, estimated_cost, usage_estimated, status, latency_ms, occurred_at \
+             upstream_model, prompt_tokens, completion_tokens, estimated_cost, pricing_status, usage_estimated, status, latency_ms, occurred_at \
              FROM usage_events WHERE request_id = $1",
         )
         .bind(request_id)
@@ -658,6 +684,16 @@ fn usage_from_row(row: sqlx::postgres::PgRow) -> Result<UsageEvent, StoreError> 
         estimated_cost: row
             .try_get("estimated_cost")
             .map_err(|_| StoreError::Unavailable)?,
+        pricing_status: match row
+            .try_get::<String, _>("pricing_status")
+            .map_err(|_| StoreError::Unavailable)?
+            .as_str()
+        {
+            "priced" => gateway_types::PricingStatus::Priced,
+            "unpriced" => gateway_types::PricingStatus::Unpriced,
+            "legacy_estimate" => gateway_types::PricingStatus::LegacyEstimate,
+            _ => return Err(StoreError::Unavailable),
+        },
         status: match status.as_str() {
             "succeeded" => UsageStatus::Succeeded,
             "provider_failed" => UsageStatus::ProviderFailed,
@@ -683,6 +719,14 @@ fn status_str(status: UsageStatus) -> &'static str {
     }
 }
 
+fn pricing_status_str(status: gateway_types::PricingStatus) -> &'static str {
+    match status {
+        gateway_types::PricingStatus::Priced => "priced",
+        gateway_types::PricingStatus::Unpriced => "unpriced",
+        gateway_types::PricingStatus::LegacyEstimate => "legacy_estimate",
+    }
+}
+
 fn to_i64(value: u64) -> Result<i64, StoreError> {
     value.try_into().map_err(|_| StoreError::Conflict)
 }
@@ -698,6 +742,299 @@ fn map_sqlx(error: sqlx::Error) -> StoreError {
             StoreError::Conflict
         }
         _ => StoreError::Unavailable,
+    }
+}
+
+#[cfg(test)]
+#[allow(clippy::items_after_test_module)]
+mod managed_quota_tests {
+    use chrono::{Duration, Utc};
+    use gateway_admin::{AdminRepository, MutationContext, ResourceKind};
+    use gateway_auth::{IdentityRepository, OnboardingDisplay};
+    use gateway_store::GatewayStore;
+    use gateway_types::{QuotaOwner, QuotaReservation};
+    use uuid::Uuid;
+
+    use super::{PgPoolOptions, PostgresStore};
+
+    fn reservation(tenant_id: &str, tokens: u64) -> QuotaReservation {
+        QuotaReservation {
+            reservation_id: Uuid::now_v7(),
+            request_id: Uuid::now_v7(),
+            owner: QuotaOwner::Tenant(tenant_id.to_owned()),
+            tenant_id: tenant_id.to_owned(),
+            project_id: None,
+            principal_id: "quota-test".into(),
+            user_id: None,
+            provider: "provider".into(),
+            requested_model: "alias".into(),
+            upstream_model: "model".into(),
+            prompt_tokens: tokens,
+            completion_tokens: 0,
+            expires_at: Utc::now() + Duration::minutes(1),
+        }
+    }
+
+    #[tokio::test]
+    async fn paid_monthly_tokens_are_unlimited_but_free_stops_at_100k() {
+        let Ok(database_url) = std::env::var("TEST_DATABASE_URL") else {
+            return;
+        };
+        let pool = PgPoolOptions::new()
+            .max_connections(2)
+            .connect(&database_url)
+            .await
+            .unwrap();
+        sqlx::migrate!("../../migrations").run(&pool).await.unwrap();
+        let store = PostgresStore { pool: pool.clone() };
+        let tenant_id = format!("quota-test-{}", Uuid::new_v4());
+        sqlx::query("INSERT INTO tenants(id,name,slug,daily_token_limit) VALUES($1,$1,$1,1000000)")
+            .bind(&tenant_id)
+            .execute(&pool)
+            .await
+            .unwrap();
+        sqlx::query(
+            "INSERT INTO tenant_plan_profiles(tenant_id,tier,billing_interval,limits,features,source)
+             VALUES($1,'core','monthly','{\"routed_tokens_per_month\":null,\"requests_per_minute\":120}'::jsonb,'{}'::jsonb,'test')",
+        )
+        .bind(&tenant_id)
+        .execute(&pool)
+        .await
+        .unwrap();
+
+        let paid = reservation(&tenant_id, 100_001);
+        assert!(store.reserve_quota(paid.clone()).await.unwrap());
+        store
+            .release_reservation(paid.reservation_id)
+            .await
+            .unwrap();
+
+        sqlx::query(
+            "UPDATE tenant_plan_profiles SET tier='free',billing_interval=NULL,
+             limits='{\"routed_tokens_per_month\":100000,\"requests_per_minute\":10}'::jsonb
+             WHERE tenant_id=$1",
+        )
+        .bind(&tenant_id)
+        .execute(&pool)
+        .await
+        .unwrap();
+        assert!(
+            !store
+                .reserve_quota(reservation(&tenant_id, 100_001))
+                .await
+                .unwrap()
+        );
+        let exact = reservation(&tenant_id, 100_000);
+        assert!(store.reserve_quota(exact.clone()).await.unwrap());
+        store
+            .release_reservation(exact.reservation_id)
+            .await
+            .unwrap();
+        sqlx::query("DELETE FROM tenant_plan_profiles WHERE tenant_id=$1")
+            .bind(&tenant_id)
+            .execute(&pool)
+            .await
+            .unwrap();
+        sqlx::query("DELETE FROM tenants WHERE id=$1")
+            .bind(&tenant_id)
+            .execute(&pool)
+            .await
+            .unwrap();
+    }
+
+    #[tokio::test]
+    async fn tied_route_priorities_are_normalized_and_free_cannot_add_fallbacks() {
+        let Ok(database_url) = std::env::var("TEST_DATABASE_URL") else {
+            return;
+        };
+        let pool = PgPoolOptions::new()
+            .max_connections(2)
+            .connect(&database_url)
+            .await
+            .unwrap();
+        let store = PostgresStore { pool: pool.clone() };
+        let tenant_id = format!("route-test-{}", Uuid::new_v4());
+        sqlx::query("INSERT INTO tenants(id,name,slug,daily_token_limit) VALUES($1,$1,$1,1000000)")
+            .bind(&tenant_id)
+            .execute(&pool)
+            .await
+            .unwrap();
+        sqlx::query(
+            "INSERT INTO tenant_plan_profiles(tenant_id,tier,billing_interval,limits,features,source)
+             VALUES($1,'core','monthly','{\"fallback_targets\":3}'::jsonb,'{}'::jsonb,'test')",
+        )
+        .bind(&tenant_id)
+        .execute(&pool)
+        .await
+        .unwrap();
+        let context = MutationContext {
+            actor: "route-test".into(),
+            tenant_id: Some(tenant_id.clone()),
+            request_id: Uuid::now_v7(),
+            gateway_admin: false,
+        };
+        store
+            .create_resource(
+                ResourceKind::ModelRoutes,
+                serde_json::json!({
+                    "tenant_id": tenant_id,
+                    "project_id": "project",
+                    "provider": "one",
+                    "requested_model": "shared-alias",
+                    "upstream_model": "one",
+                    "priority": 1
+                }),
+                &context,
+            )
+            .await
+            .unwrap();
+        store
+            .create_resource(
+                ResourceKind::ModelRoutes,
+                serde_json::json!({
+                    "tenant_id": tenant_id,
+                    "project_id": "project",
+                    "provider": "two",
+                    "requested_model": "shared-alias",
+                    "upstream_model": "two",
+                    "priority": 1
+                }),
+                &context,
+            )
+            .await
+            .unwrap();
+        let priorities: Vec<i32> = sqlx::query_scalar(
+            "SELECT (body->>'priority')::int FROM admin_resources
+             WHERE kind='model_routes' AND tenant_id=$1 ORDER BY 1",
+        )
+        .bind(&tenant_id)
+        .fetch_all(&pool)
+        .await
+        .unwrap();
+        assert_eq!(priorities, vec![1, 2]);
+        sqlx::query(
+            "UPDATE tenant_plan_profiles SET tier='free',billing_interval=NULL,
+             limits='{\"fallback_targets\":0}'::jsonb WHERE tenant_id=$1",
+        )
+        .bind(&tenant_id)
+        .execute(&pool)
+        .await
+        .unwrap();
+        assert!(
+            store
+                .create_resource(
+                    ResourceKind::ModelRoutes,
+                    serde_json::json!({
+                        "tenant_id": tenant_id,
+                        "project_id": "project",
+                        "provider": "three",
+                        "requested_model": "another-alias",
+                        "upstream_model": "three",
+                        "priority": 1
+                    }),
+                    &context,
+                )
+                .await
+                .is_err()
+        );
+    }
+
+    #[tokio::test]
+    async fn onboarding_uses_live_resources_and_persists_personal_display_state() {
+        let Ok(database_url) = std::env::var("TEST_DATABASE_URL") else {
+            return;
+        };
+        let pool = PgPoolOptions::new()
+            .max_connections(2)
+            .connect(&database_url)
+            .await
+            .unwrap();
+        sqlx::migrate!("../../migrations").run(&pool).await.unwrap();
+        let store = PostgresStore { pool: pool.clone() };
+        let user_id = Uuid::now_v7();
+        let tenant_id = Uuid::now_v7();
+        let tenant = tenant_id.to_string();
+        let project_id = Uuid::now_v7().to_string();
+        sqlx::query(
+            "INSERT INTO users(id,email,password_hash,gateway_admin)
+             VALUES($1,$2,'test-hash',false)",
+        )
+        .bind(user_id)
+        .bind(format!("onboarding-{user_id}@example.com"))
+        .execute(&pool)
+        .await
+        .unwrap();
+        sqlx::query(
+            "INSERT INTO tenants(id,name,slug,daily_token_limit)
+             VALUES($1,'Onboarding test',$1,100000)",
+        )
+        .bind(&tenant)
+        .execute(&pool)
+        .await
+        .unwrap();
+        sqlx::query(
+            "INSERT INTO tenant_memberships(tenant_id,user_id,role)
+             VALUES($1,$2,'owner')",
+        )
+        .bind(&tenant)
+        .bind(user_id)
+        .execute(&pool)
+        .await
+        .unwrap();
+
+        let empty = store
+            .onboarding_facts(tenant_id, user_id, None)
+            .await
+            .unwrap();
+        assert!(empty.auto_open);
+        assert!(!empty.project_ready);
+
+        sqlx::query(
+            "INSERT INTO admin_resources(kind,id,tenant_id,body)
+             VALUES('projects',$1,$2,$3)",
+        )
+        .bind(&project_id)
+        .bind(&tenant)
+        .bind(serde_json::json!({"name":"First project"}))
+        .execute(&pool)
+        .await
+        .unwrap();
+        let with_project = store
+            .onboarding_facts(tenant_id, user_id, Some(&project_id))
+            .await
+            .unwrap();
+        assert!(with_project.project_ready);
+        assert_eq!(
+            with_project.project_id.as_deref(),
+            Some(project_id.as_str())
+        );
+
+        store
+            .update_onboarding_display(tenant_id, user_id, OnboardingDisplay::Collapsed)
+            .await
+            .unwrap();
+        let collapsed = store
+            .onboarding_facts(tenant_id, user_id, Some(&project_id))
+            .await
+            .unwrap();
+        assert!(collapsed.seen_at.is_some());
+        assert!(collapsed.collapsed_at.is_some());
+
+        sqlx::query("DELETE FROM admin_resources WHERE kind='projects' AND id=$1")
+            .bind(&project_id)
+            .execute(&pool)
+            .await
+            .unwrap();
+        sqlx::query("DELETE FROM tenants WHERE id=$1")
+            .bind(&tenant)
+            .execute(&pool)
+            .await
+            .unwrap();
+        sqlx::query("DELETE FROM users WHERE id=$1")
+            .bind(user_id)
+            .execute(&pool)
+            .await
+            .unwrap();
     }
 }
 

@@ -29,3 +29,6 @@ rust_decimal.workspace = true
 sqlx.workspace = true
 tracing.workspace = true
 uuid.workspace = true
+
+[dev-dependencies]
+tokio.workspace = true
