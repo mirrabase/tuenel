@@ -450,7 +450,8 @@ impl McpPolicyRepository for PostgresStore {
             policy = policy.restrict_with(&next);
         }
         let tier = sqlx::query_scalar::<_, String>(
-            "SELECT tier FROM tenant_plan_profiles WHERE tenant_id=$1",
+            "SELECT CASE WHEN valid_until IS NOT NULL AND valid_until<=now() THEN 'free' ELSE tier END \
+             FROM tenant_plan_profiles WHERE tenant_id=$1",
         )
         .bind(&principal.tenant_id)
         .fetch_optional(&self.pool)

@@ -13,13 +13,16 @@ const rules: [RegExp, ReadonlySet<string>][] = [
 ]
 
 const commercialTenantRoute =
-  /^\/commercial\/tenants\/([0-9a-f-]{36})\/(billing\/(?:checkout|portal|status|subscription)|oidc|audit\/export)$/i
+  /^\/commercial\/tenants\/([0-9a-f-]{36})\/(billing\/(?:checkout|portal|status|subscription|trial\/start|subscription\/(?:cancel|resume))|oidc|audit\/export)$/i
 
 const commercialMethods: Record<string, ReadonlySet<string>> = {
   "billing/checkout": new Set(["POST"]),
   "billing/portal": new Set(["POST"]),
   "billing/status": new Set(["GET"]),
   "billing/subscription": new Set(["PATCH"]),
+  "billing/trial/start": new Set(["POST"]),
+  "billing/subscription/cancel": new Set(["POST"]),
+  "billing/subscription/resume": new Set(["POST"]),
   oidc: new Set(["GET", "PUT"]),
   "audit/export": new Set(["GET"]),
 }

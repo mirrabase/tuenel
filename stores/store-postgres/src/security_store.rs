@@ -35,7 +35,8 @@ impl SecurityRepository for PostgresStore {
             .collect::<Result<Vec<SecurityPolicy>, SecurityError>>()?;
         let policy = gateway_security::resolve_security_hierarchy(policies);
         let tier = sqlx::query_scalar::<_, String>(
-            "SELECT tier FROM tenant_plan_profiles WHERE tenant_id=$1",
+            "SELECT CASE WHEN valid_until IS NOT NULL AND valid_until<=now() THEN 'free' ELSE tier END \
+             FROM tenant_plan_profiles WHERE tenant_id=$1",
         )
         .bind(&context.tenant_id)
         .fetch_optional(&self.pool)

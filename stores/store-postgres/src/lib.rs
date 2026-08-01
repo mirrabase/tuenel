@@ -114,7 +114,8 @@ impl GatewayStore for PostgresStore {
 
     async fn plan_requests_per_minute(&self, tenant_id: &str) -> Result<Option<u64>, StoreError> {
         sqlx::query_scalar::<_, Option<i64>>(
-            "SELECT (limits->>'requests_per_minute')::BIGINT FROM tenant_plan_profiles WHERE tenant_id=$1",
+            "SELECT CASE WHEN valid_until IS NOT NULL AND valid_until<=now() THEN 10 \
+             ELSE (limits->>'requests_per_minute')::BIGINT END FROM tenant_plan_profiles WHERE tenant_id=$1",
         )
         .bind(tenant_id)
         .fetch_optional(&self.pool)
@@ -147,7 +148,9 @@ impl GatewayStore for PostgresStore {
             _ => return Err(StoreError::Unavailable),
         };
         let limit: Option<i64> = sqlx::query_scalar::<_, Option<i64>>(
-            "SELECT (limits->>$2)::BIGINT FROM tenant_plan_profiles WHERE tenant_id=$1",
+            "SELECT CASE WHEN valid_until IS NOT NULL AND valid_until<=now() THEN \
+             ('{\"members\":1,\"active_api_keys\":2,\"mcp_servers\":0,\"security_patterns\":0,\"fallback_targets\":0}'::jsonb->>$2)::BIGINT \
+             ELSE (limits->>$2)::BIGINT END FROM tenant_plan_profiles WHERE tenant_id=$1",
         )
         .bind(tenant_id)
         .bind(resource)
@@ -179,7 +182,8 @@ impl GatewayStore for PostgresStore {
             _ => return Err(StoreError::Unavailable),
         }
         sqlx::query_scalar::<_, Option<bool>>(
-            "SELECT (features->>$2)::boolean FROM tenant_plan_profiles WHERE tenant_id=$1",
+            "SELECT CASE WHEN valid_until IS NOT NULL AND valid_until<=now() THEN false \
+             ELSE (features->>$2)::boolean END FROM tenant_plan_profiles WHERE tenant_id=$1",
         )
         .bind(tenant_id)
         .bind(feature)
@@ -268,7 +272,8 @@ impl GatewayStore for PostgresStore {
         // across many virtual keys. Locking the projection row serializes the
         // usage + pending reservation check.
         let monthly_plan_limit = sqlx::query_scalar::<_, Option<i64>>(
-            "SELECT (limits->>'routed_tokens_per_month')::BIGINT FROM tenant_plan_profiles \
+            "SELECT CASE WHEN valid_until IS NOT NULL AND valid_until<=now() THEN 100000 \
+             ELSE (limits->>'routed_tokens_per_month')::BIGINT END FROM tenant_plan_profiles \
              WHERE tenant_id=$1 FOR UPDATE",
         )
         .bind(&reservation.tenant_id)

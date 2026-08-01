@@ -31,6 +31,16 @@ test("managed commercial routes allow only their intended methods", () => {
     ),
     true
   )
+  for (const route of [
+    "billing/trial/start",
+    "billing/subscription/cancel",
+    "billing/subscription/resume",
+  ]) {
+    assert.equal(
+      allowedGatewayRoute(`/commercial/tenants/${tenant}/${route}`, "POST", tenant),
+      true
+    )
+  }
   assert.equal(
     allowedGatewayRoute("/commercial/billing/catalog", "GET", tenant),
     true
