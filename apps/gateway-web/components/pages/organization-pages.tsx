@@ -843,6 +843,7 @@ type BillingOverview = {
 
 type ManagedBillingStatus = {
   configured: boolean
+  access_kind?: "free" | "subscription" | "lifetime"
   tier: "free" | "core" | "pro"
   interval?: "monthly" | "annual"
   status?:
@@ -924,6 +925,10 @@ export function OrganizationBillingPage() {
   )
   const canManage = gatewayAdmin || ["owner", "admin"].includes(tenantRole)
   const routedTokenLimit = managed.data?.limits.routed_tokens_per_month
+  const accessKind =
+    managed.data?.access_kind ??
+    (managed.data?.configured ? "subscription" : "free")
+  const lifetimeAccess = accessKind === "lifetime"
 
   async function openCommercialBilling(
     action: "checkout" | "portal",
@@ -984,7 +989,10 @@ export function OrganizationBillingPage() {
         title="Billing"
         action={
           <div className="flex gap-2">
-            {edition === "managed" && managed.data?.configured && canManage && (
+            {edition === "managed" &&
+              accessKind === "subscription" &&
+              managed.data?.configured &&
+              canManage && (
               <Button
                 disabled={commercialPending}
                 onClick={() => void openCommercialBilling("portal")}
@@ -992,7 +1000,7 @@ export function OrganizationBillingPage() {
                 Customer portal
               </Button>
             )}
-            {billing?.upgrade_url && (
+            {!lifetimeAccess && billing?.upgrade_url && (
               <Button
                 variant="outline"
                 render={<a href={billing.upgrade_url} />}
@@ -1001,7 +1009,7 @@ export function OrganizationBillingPage() {
                 <ArrowSquareOutIcon data-icon="inline-end" />
               </Button>
             )}
-            {billing?.manage_url && (
+            {!lifetimeAccess && billing?.manage_url && (
               <Button render={<a href={billing.manage_url} />}>
                 Manage plan
                 <ArrowSquareOutIcon data-icon="inline-end" />
@@ -1024,6 +1032,11 @@ export function OrganizationBillingPage() {
               <Badge variant="secondary" className="capitalize">
                 {managed.data?.tier ?? "free"}
               </Badge>
+              {lifetimeAccess && (
+                <Badge variant="outline" className="ml-2">
+                  Lifetime
+                </Badge>
+              )}
               <p className="mt-2 text-sm text-muted-foreground">
                 {Number(
                   managed.data?.usage.routed_tokens_this_month ?? 0
@@ -1044,19 +1057,25 @@ export function OrganizationBillingPage() {
                 </div>
               )}
             </div>
-            <div className="flex rounded-md border p-1">
-              {(["monthly", "annual"] as const).map((value) => (
-                <Button
-                  key={value}
-                  size="sm"
-                  variant={interval === value ? "secondary" : "ghost"}
-                  onClick={() => setInterval(value)}
-                  className="capitalize"
-                >
-                  {value}
-                </Button>
-              ))}
-            </div>
+            {lifetimeAccess ? (
+              <p className="text-sm text-muted-foreground">
+                This organization has permanent access and is not billed.
+              </p>
+            ) : (
+              <div className="flex rounded-md border p-1">
+                {(["monthly", "annual"] as const).map((value) => (
+                  <Button
+                    key={value}
+                    size="sm"
+                    variant={interval === value ? "secondary" : "ghost"}
+                    onClick={() => setInterval(value)}
+                    className="capitalize"
+                  >
+                    {value}
+                  </Button>
+                ))}
+              </div>
+            )}
           </div>
           {Boolean(managed.data?.overages.length) && (
             <Alert className="mb-4">
@@ -1076,7 +1095,9 @@ export function OrganizationBillingPage() {
                 tier === "free" ? catalog.data?.free : paid?.profile
               const selected =
                 managed.data?.tier === tier &&
-                (tier === "free" || managed.data?.interval === interval)
+                (tier === "free" ||
+                  lifetimeAccess ||
+                  managed.data?.interval === interval)
               const price = paid
                 ? new Intl.NumberFormat(undefined, {
                     style: "currency",
@@ -1143,7 +1164,13 @@ export function OrganizationBillingPage() {
                       )}
                     </ul>
                     {selected ? (
-                      <Badge variant="secondary">Current plan</Badge>
+                      <Badge variant="secondary">
+                        {lifetimeAccess ? "Lifetime plan" : "Current plan"}
+                      </Badge>
+                    ) : lifetimeAccess && tier !== "free" ? (
+                      <p className="text-xs text-muted-foreground">
+                        Lifetime plans are managed by the Tuenel operator.
+                      </p>
                     ) : tier !== "free" && canManage ? (
                       <Button
                         variant={tier === "pro" ? "default" : "outline"}

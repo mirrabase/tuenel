@@ -282,6 +282,10 @@ export function ProvidersPage() {
             form.get("cached_input_cost_per_million") === ""
               ? undefined
               : Number(form.get("cached_input_cost_per_million")),
+          embedding_cost_per_million:
+            form.get("embedding_cost_per_million") === ""
+              ? undefined
+              : Number(form.get("embedding_cost_per_million")),
           effective_from: new Date().toISOString(),
         }),
       })
@@ -601,7 +605,9 @@ export function ProvidersPage() {
           <DialogHeader>
             <DialogTitle>Model pricing</DialogTitle>
             <DialogDescription>
-              USD cost per one million tokens for {pricingModel?.model}.
+              Provider cost in USD per one million tokens for {pricingModel?.model}.
+              This estimates Usage cost and does not change Lemon Squeezy plan
+              prices.
             </DialogDescription>
           </DialogHeader>
           <form onSubmit={savePricing}>
@@ -643,6 +649,19 @@ export function ProvidersPage() {
                   step="any"
                   defaultValue={value(
                     pricingModel?.price?.cached_input_cost_per_million,
+                    ""
+                  )}
+                />
+              </Field>
+              <Field>
+                <FieldLabel>Embedding cost / 1M tokens</FieldLabel>
+                <Input
+                  name="embedding_cost_per_million"
+                  type="number"
+                  min={0}
+                  step="any"
+                  defaultValue={value(
+                    pricingModel?.price?.embedding_cost_per_million,
                     ""
                   )}
                 />
