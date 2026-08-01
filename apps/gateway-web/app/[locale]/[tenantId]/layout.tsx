@@ -35,7 +35,7 @@ export default async function TenantLayout({
           process.env.GATEWAY_PUBLIC_URL?.trim() || "http://localhost:8080/v1"
         ).replace(/\/+$/, ""),
         projectDomain:
-          process.env.TUENEL_PROJECT_DOMAIN?.trim() || "mirrabase.com",
+          process.env.TUENEL_PROJECT_DOMAIN?.trim() || "tuenel.com",
         edition: entitlement?.edition ?? "community",
         capabilities: {
           browserSso: entitlement?.capabilities.browser_sso.enabled ?? false,

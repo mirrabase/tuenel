@@ -1050,7 +1050,7 @@ fn project_endpoint(headers: &HeaderMap) -> Option<String> {
         .split(':')
         .next()?
         .to_ascii_lowercase();
-    let label = host.strip_suffix(".mirrabase.com")?;
+    let label = host.strip_suffix(".tuenel.com")?;
     let (slug, suffix) = label.rsplit_once('-')?;
     (label.len() <= 63
         && !slug.is_empty()
@@ -2042,14 +2042,14 @@ mod tests {
     #[test]
     fn recognizes_only_canonical_project_endpoint_hosts() {
         let mut headers = HeaderMap::new();
-        headers.insert("host", "my-project-k9x2.mirrabase.com:443".parse().unwrap());
+        headers.insert("host", "my-project-k9x2.tuenel.com:443".parse().unwrap());
         assert_eq!(
             project_endpoint(&headers).as_deref(),
             Some("my-project-k9x2")
         );
-        headers.insert("host", "random.mirrabase.com".parse().unwrap());
+        headers.insert("host", "random.tuenel.com".parse().unwrap());
         assert_eq!(project_endpoint(&headers), None);
-        headers.insert("host", "project-abc!.mirrabase.com".parse().unwrap());
+        headers.insert("host", "project-abc!.tuenel.com".parse().unwrap());
         assert_eq!(project_endpoint(&headers), None);
     }
 }
