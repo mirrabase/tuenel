@@ -467,9 +467,11 @@ impl<'a> ProviderRequest<'a> {
             stream,
             temperature: request.generation.temperature,
             top_p: request.generation.top_p,
-            max_tokens: (dialect == OpenAiDialect::Compatible)
+            max_tokens: (dialect == OpenAiDialect::Compatible
+                && request.generation.max_output_tokens_explicit)
                 .then_some(request.generation.max_output_tokens),
-            max_completion_tokens: (dialect == OpenAiDialect::Official)
+            max_completion_tokens: (dialect == OpenAiDialect::Official
+                && request.generation.max_output_tokens_explicit)
                 .then_some(request.generation.max_output_tokens),
             stop: request.generation.stop.clone(),
             stream_options: stream.then_some(StreamOptions {
@@ -643,6 +645,7 @@ mod tests {
             stream_include_usage: true,
             generation: GenerationParameters {
                 max_output_tokens: 32,
+                max_output_tokens_explicit: true,
                 ..Default::default()
             },
         }
@@ -711,6 +714,21 @@ mod tests {
         .unwrap();
         assert_eq!(compatible["max_tokens"], 32);
         assert!(compatible.get("max_completion_tokens").is_none());
+    }
+
+    #[test]
+    fn implicit_gateway_token_budget_is_not_forwarded_upstream() {
+        let mut gateway_request = request(false);
+        gateway_request.generation.max_output_tokens_explicit = false;
+        let official = serde_json::to_value(ProviderRequest::from_gateway(
+            "gpt-5",
+            &gateway_request,
+            false,
+            OpenAiDialect::Official,
+        ))
+        .unwrap();
+        assert!(official.get("max_completion_tokens").is_none());
+        assert!(official.get("max_tokens").is_none());
     }
 
     #[tokio::test]

@@ -70,6 +70,9 @@ pub struct GenerationParameters {
     pub top_p: Option<f32>,
     /// Maximum generated tokens.
     pub max_output_tokens: u32,
+    /// Whether the client explicitly supplied the output-token limit.
+    #[serde(default)]
+    pub max_output_tokens_explicit: bool,
     /// Stop sequences.
     pub stop: Vec<String>,
 }

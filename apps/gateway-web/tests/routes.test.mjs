@@ -391,6 +391,7 @@ test("public gateway URLs come from runtime deployment configuration", () => {
   )
 
   assert.match(provider, /gatewayEndpoint: string/)
+  assert.match(provider, /projectDomain: string/)
   assert.match(layout, /process\.env\.GATEWAY_PUBLIC_URL/)
   assert.match(shared, /return useGateway\(\)\.gatewayEndpoint/)
   assert.ok(shared.includes('replace(/\\/v1$/, "")'))
@@ -399,6 +400,17 @@ test("public gateway URLs come from runtime deployment configuration", () => {
   assert.doesNotMatch(projectConsole, /endpoint\.replace[^\n]+\/v1/)
   assert.ok(apiReference.includes("`${gatewayOrigin}${activeEndpoint.path}`"))
   assert.doesNotMatch(apiReference, /\{gatewayEndpoint\}\/v1/)
+})
+
+test("project Connect uses its isolated endpoint and configured model", () => {
+  const projectConsole = readFileSync(
+    join(root, "components/pages/project-console-pages.tsx"),
+    "utf8"
+  )
+  assert.match(projectConsole, /https:\/\/\$\{endpointId\}\.\$\{projectDomain\}\/v1/)
+  assert.match(projectConsole, /Your configured model/)
+  assert.match(projectConsole, /requested_model/)
+  assert.doesNotMatch(projectConsole, /model="gateway-default"/)
 })
 
 test("browser credentials are never persisted in script-readable storage", () => {

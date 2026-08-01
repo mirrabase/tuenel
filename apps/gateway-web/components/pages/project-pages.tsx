@@ -51,7 +51,7 @@ type Project = {
 }
 
 export function ProjectsPage() {
-  const { tenantId } = useGateway()
+  const { tenantId, projectDomain } = useGateway()
   const pathname = usePathname()
   const locale = pathname.split("/")[1]
   const state = useGatewayData<Page<Project>>(
@@ -192,7 +192,7 @@ export function ProjectsPage() {
                         </CardDescription>
                         {project.endpoint_id && (
                           <p className="break-all font-mono text-xs text-muted-foreground">
-                            https://{project.endpoint_id}.mirrabase.com/v1
+                            https://{project.endpoint_id}.{projectDomain}/v1
                           </p>
                         )}
                       </CardHeader>

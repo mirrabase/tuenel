@@ -526,10 +526,12 @@ function ConnectModal({
   open,
   onOpenChange,
   endpoint,
+  model,
 }: {
   open: boolean
   onOpenChange: (open: boolean) => void
   endpoint: string
+  model: string
 }) {
   const [copiedTab, setCopiedTab] = React.useState<string | null>(null)
 
@@ -546,7 +548,7 @@ function ConnectModal({
   -H "Content-Type: application/json" \\
   -H "Authorization: Bearer YOUR_VIRTUAL_KEY" \\
   -d '{
-    "model": "gateway-default",
+    "model": "${model}",
     "messages": [
       { "role": "user", "content": "Hello from Tuenel Gateway!" }
     ]
@@ -563,7 +565,7 @@ client = OpenAI(
 )
 
 response = client.chat.completions.create(
-    model="gateway-default",
+    model="${model}",
     messages=[{"role": "user", "content": "Hello from Tuenel Gateway!"}],
 )
 
@@ -581,7 +583,7 @@ const openai = new OpenAI({
 
 async function main() {
   const response = await openai.chat.completions.create({
-  model: "gateway-default",
+    model: "${model}",
     messages: [{ role: "user", content: "Hello from Tuenel Gateway!" }],
   });
 
@@ -596,7 +598,7 @@ main();`,
       code: `from langchain_openai import ChatOpenAI
 
 llm = ChatOpenAI(
-    model="gateway-default",
+    model="${model}",
     base_url="${baseUrl}",
     api_key="YOUR_VIRTUAL_KEY",
 )
@@ -610,7 +612,7 @@ print(response.content)`,
       code: `import { ChatOpenAI } from "@langchain/openai";
 
 const model = new ChatOpenAI({
-  modelName: "gateway-default",
+  modelName: "${model}",
   configuration: {
     baseURL: "${baseUrl}",
     apiKey: "YOUR_VIRTUAL_KEY",
@@ -632,7 +634,7 @@ const gateway = createOpenAI({
 });
 
 const { text } = await generateText({
-  model: gateway("gateway-default"),
+  model: gateway("${model}"),
   prompt: "Hello from Tuenel Gateway!",
 });
 
@@ -644,7 +646,7 @@ console.log(text);`,
       code: `from llama_index.llms.openai import OpenAI
 
 llm = OpenAI(
-    model="gateway-default",
+    model="${model}",
     api_base="${baseUrl}",
     api_key="YOUR_VIRTUAL_KEY",
 )
@@ -698,6 +700,14 @@ print(response.text)`,
                 >
                   <CopyIcon />
                 </Button>
+              </div>
+            </div>
+            <div>
+              <span className="text-[10px] font-semibold tracking-wider text-muted-foreground uppercase">
+                Your configured model
+              </span>
+              <div className="mt-1 font-mono text-xs text-foreground">
+                {model}
               </div>
             </div>
             <div>
@@ -783,12 +793,14 @@ print(response.text)`,
 }
 
 export function ProjectOverviewPage() {
-  const { tenantId, projectId } = useGateway()
+  const { tenantId, projectId, projectDomain, gatewayEndpoint } = useGateway()
   const pathname = usePathname()
   const locale = pathname.split("/")[1]
   const [range, setRange] = React.useState<TimeRange>("24h")
   const [connectOpen, setConnectOpen] = React.useState(false)
-  const endpoint = useGatewayEndpoint()
+  const projects = useGatewayData<Page<Resource>>(
+    projectPath("/admin/projects", tenantId, projectId)
+  )
   const usage = useGatewayData<Row>(
     useRangePath("/admin/usage/summary", tenantId, projectId, range)
   )
@@ -814,6 +826,13 @@ export function ProjectOverviewPage() {
   )
   const providerRows = providers.data?.data ?? []
   const routeRows = routes.data?.data ?? []
+  const project = projects.data?.data.find((item) => item.id === projectId)
+  const endpointId = text(project?.endpoint_id, "")
+  const endpoint = endpointId
+    ? `https://${endpointId}.${projectDomain}/v1`
+    : gatewayEndpoint
+  const configuredModel =
+    text(routeRows[0]?.requested_model, "") || "YOUR_CONFIGURED_MODEL"
   const requestRows = requests.data?.data ?? []
   const healthRows = Array.isArray(system.data?.providers)
     ? (system.data.providers as Row[])
@@ -833,6 +852,7 @@ export function ProjectOverviewPage() {
     routedProviderIds.has(provider.id)
   )
   const loading =
+    projects.loading ||
     usage.loading ||
     series.loading ||
     providers.loading ||
@@ -841,6 +861,7 @@ export function ProjectOverviewPage() {
     requests.loading ||
     system.loading
   const error =
+    projects.error ??
     usage.error ??
     series.error ??
     providers.error ??
@@ -925,6 +946,7 @@ export function ProjectOverviewPage() {
         open={connectOpen}
         onOpenChange={setConnectOpen}
         endpoint={endpoint}
+        model={configuredModel}
       />
       <DataState loading={loading} error={error}>
         <div className="w-full min-w-0 space-y-4">
