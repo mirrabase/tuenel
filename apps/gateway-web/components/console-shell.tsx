@@ -34,6 +34,7 @@ import {
 } from "@phosphor-icons/react"
 
 import { Brand } from "@/components/brand"
+import { OnboardingGuide } from "@/components/onboarding-guide"
 import { useGateway } from "@/components/gateway-provider"
 import {
   Command,
@@ -426,6 +427,7 @@ export function ConsoleShell({ children }: { children: React.ReactNode }) {
               Search
               <kbd className="ml-auto text-[0.625rem]">⌘K</kbd>
             </Button>
+            <OnboardingGuide />
             <Button
               variant="ghost"
               size="icon-sm"

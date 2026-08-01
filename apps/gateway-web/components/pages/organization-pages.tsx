@@ -78,6 +78,7 @@ export function OrganizationProvidersPage() {
   )
   const [open, setOpen] = React.useState(false)
   const [pending, setPending] = React.useState(false)
+  const [activating, setActivating] = React.useState<string[]>([])
   const canWrite = gatewayAdmin || ["owner", "admin"].includes(tenantRole)
   const healthRows = Array.isArray(health.data?.providers)
     ? (health.data.providers as JsonRecord[])
@@ -91,22 +92,78 @@ export function OrganizationProvidersPage() {
   }
 
   async function syncProvider(providerId: string) {
-    for (let attempt = 0; attempt < 6; attempt += 1) {
+    setActivating((current) => [...new Set([...current, providerId])])
+    for (let attempt = 0; attempt < 8; attempt += 1) {
       try {
-        await gatewayFetch(`/admin/providers/${providerId}/models`, tenantId, {
-          method: "POST",
-        })
-        await gatewayFetch(`/admin/providers/${providerId}/check`, tenantId, {
-          method: "POST",
-        })
+        await gatewayFetch(
+          `/admin/providers/${encodeURIComponent(providerId)}/check`,
+          tenantId,
+          {
+            method: "POST",
+          }
+        )
+        await gatewayFetch(
+          `/admin/providers/${encodeURIComponent(providerId)}/models`,
+          tenantId,
+          {
+            method: "POST",
+          }
+        )
         providers.reload()
         health.reload()
+        setActivating((current) => current.filter((id) => id !== providerId))
+        toast.success("Provider is healthy and models are synchronized")
         return
       } catch {
         await new Promise((resolve) => window.setTimeout(resolve, 1000))
       }
     }
-    toast.warning("Provider saved; model sync is still pending")
+    providers.reload()
+    health.reload()
+    setActivating((current) => current.filter((id) => id !== providerId))
+    toast.warning("Automatic provider verification needs attention")
+  }
+
+  async function monitorProvider(providerId: string) {
+    setActivating((current) => [...new Set([...current, providerId])])
+    for (let attempt = 0; attempt < 16; attempt += 1) {
+      await new Promise((resolve) => window.setTimeout(resolve, 750))
+      try {
+        const [providerPage, system] = await Promise.all([
+          gatewayFetch<Page<Provider>>(
+            `/admin/providers?tenant_id=${encodeURIComponent(tenantId)}`,
+            tenantId
+          ),
+          gatewayFetch<JsonRecord>(
+            `/admin/system?tenant_id=${encodeURIComponent(tenantId)}`,
+            tenantId
+          ),
+        ])
+        const provider = providerPage.data.find(
+          (item) => item.id === providerId
+        )
+        const rows = Array.isArray(system.providers)
+          ? (system.providers as JsonRecord[])
+          : []
+        const providerHealth = rows.find(
+          (row) => String(row.provider_id) === providerId
+        )
+        providers.reload()
+        health.reload()
+        if (
+          provider?.available_models?.length &&
+          providerHealth?.status === "healthy"
+        ) {
+          setActivating((current) => current.filter((id) => id !== providerId))
+          toast.success("Provider is healthy and models are synchronized")
+          return
+        }
+      } catch {
+        // The durable backend activation keeps running if this browser poll fails.
+      }
+    }
+    setActivating((current) => current.filter((id) => id !== providerId))
+    toast.warning("Provider saved; automatic verification is still pending")
   }
 
   async function create(event: React.FormEvent<HTMLFormElement>) {
@@ -132,28 +189,16 @@ export function OrganizationProvidersPage() {
       })
       setOpen(false)
       providers.reload()
-      toast.success("Provider added")
-      void syncProvider(String(form.get("id")))
+      toast.success(
+        "Provider added. Verifying health and models automatically…"
+      )
+      void monitorProvider(String(form.get("id")))
     } catch (error) {
       toast.error(
         error instanceof Error ? error.message : "Provider creation failed"
       )
     } finally {
       setPending(false)
-    }
-  }
-
-  async function check(provider: Provider) {
-    try {
-      await gatewayFetch(`/admin/providers/${provider.id}/check`, tenantId, {
-        method: "POST",
-      })
-      health.reload()
-      toast.success("Provider health refreshed")
-    } catch (error) {
-      toast.error(
-        error instanceof Error ? error.message : "Health check failed"
-      )
     }
   }
 
@@ -210,6 +255,18 @@ export function OrganizationProvidersPage() {
                     (row) => String(row.provider_id) === provider.id
                   )
                   const models = modelsFor(provider.id)
+                  const checking = activating.includes(provider.id)
+                  const ready =
+                    providerHealth?.status === "healthy" && models.length > 0
+                  const status = checking
+                    ? "Checking"
+                    : ready
+                      ? "Healthy"
+                      : providerHealth?.status === "unhealthy"
+                        ? "Unhealthy"
+                        : models.length
+                          ? "Health pending"
+                          : "Model sync pending"
                   return (
                     <TableRow key={provider.id}>
                       <TableCell>
@@ -222,12 +279,9 @@ export function OrganizationProvidersPage() {
                       </TableCell>
                       <TableCell>
                         <StatusBadge
-                          status={String(
-                            providerHealth?.status ??
-                              (provider.enabled === false
-                                ? "Disabled"
-                                : "Configured")
-                          )}
+                          status={
+                            provider.enabled === false ? "Disabled" : status
+                          }
                         />
                       </TableCell>
                       <TableCell>
@@ -253,9 +307,14 @@ export function OrganizationProvidersPage() {
                         <Button
                           size="sm"
                           variant="outline"
-                          onClick={() => check(provider)}
+                          disabled={!canWrite || checking || ready}
+                          onClick={() => void syncProvider(provider.id)}
                         >
-                          Check health
+                          {checking
+                            ? "Checking…"
+                            : ready
+                              ? "Ready"
+                              : "Retry setup"}
                         </Button>
                       </TableCell>
                     </TableRow>
@@ -1126,8 +1185,8 @@ export function OrganizationBillingPage() {
                 </DialogDescription>
               </DialogHeader>
               <div className="rounded-lg border bg-muted/30 p-4 text-sm">
-                This submits the subscription change immediately. You can
-                review invoices and payment details in the customer portal.
+                This submits the subscription change immediately. You can review
+                invoices and payment details in the customer portal.
               </div>
               <DialogFooter>
                 <Button

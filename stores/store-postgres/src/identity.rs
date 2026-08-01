@@ -1,8 +1,8 @@
 use async_trait::async_trait;
 use chrono::{DateTime, Utc};
 use gateway_auth::{
-    IdentityRepository, Membership, Organization, OrganizationUpdate, PendingInvitation,
-    TenantRole, VerificationResult, WebAuthError, WebUser,
+    IdentityRepository, Membership, OnboardingDisplay, OnboardingFacts, Organization,
+    OrganizationUpdate, PendingInvitation, TenantRole, VerificationResult, WebAuthError, WebUser,
 };
 use sqlx::Row;
 use uuid::Uuid;
@@ -571,6 +571,135 @@ impl IdentityRepository for PostgresStore {
             .await
             .map_err(map_error)?;
         transaction.commit().await.map_err(map_error)
+    }
+
+    async fn onboarding_facts(
+        &self,
+        tenant_id: Uuid,
+        user_id: Uuid,
+        project_id: Option<&str>,
+    ) -> Result<OnboardingFacts, WebAuthError> {
+        if project_id.is_some_and(|id| id.is_empty() || id.len() > 255) {
+            return Err(WebAuthError::Invalid);
+        }
+        let row = sqlx::query(
+            "WITH selected_project AS (
+                SELECT r.id
+                FROM admin_resources r
+                WHERE r.kind='projects' AND r.tenant_id=$1
+                  AND r.enabled AND r.retired_at IS NULL
+                ORDER BY CASE WHEN r.id=$3 THEN 0 ELSE 1 END,
+                         r.created_at DESC,r.id DESC
+                LIMIT 1
+             ), ready_providers AS (
+                SELECT p.id
+                FROM admin_resources p
+                JOIN provider_health h ON h.provider_id=p.id AND h.status='healthy'
+                WHERE p.kind='providers' AND (p.tenant_id=$1 OR p.tenant_id IS NULL)
+                  AND p.enabled AND p.retired_at IS NULL
+                  AND ((jsonb_typeof(p.body->'available_models')='array'
+                        AND jsonb_array_length(p.body->'available_models')>0)
+                       OR (p.tenant_id IS NULL
+                           AND COALESCE((p.body->>'environment_credential')::boolean,false)))
+             )
+             SELECT t.onboarding_auto_open,m.onboarding_seen_at,
+                    m.onboarding_collapsed_at,
+                    (SELECT id FROM selected_project) AS project_id,
+                    EXISTS(SELECT 1 FROM selected_project) AS project_ready,
+                    EXISTS(SELECT 1 FROM ready_providers) AS provider_ready,
+                    EXISTS(
+                        SELECT 1 FROM admin_resources r
+                        JOIN selected_project s
+                          ON r.body->>'project_id'=s.id OR r.body->>'project_id' IS NULL
+                        JOIN ready_providers p ON p.id=r.body->>'provider'
+                        JOIN admin_resources provider
+                          ON provider.kind='providers' AND provider.id=p.id
+                        WHERE r.kind='model_routes' AND (r.tenant_id=$1 OR r.tenant_id IS NULL)
+                          AND r.enabled AND r.retired_at IS NULL
+                          AND (provider.body->'available_models' ? (r.body->>'upstream_model')
+                               OR (provider.tenant_id IS NULL
+                                   AND COALESCE((provider.body->>'environment_credential')::boolean,false)))
+                    ) AS route_ready,
+                    EXISTS(
+                        SELECT 1 FROM virtual_keys k
+                        JOIN selected_project s ON k.project_id=s.id
+                        WHERE k.tenant_id=$1 AND k.revoked_at IS NULL
+                          AND (k.expires_at IS NULL OR k.expires_at>now())
+                          AND NOT EXISTS(
+                            SELECT 1 FROM plan_resource_suspensions suspension
+                            WHERE suspension.tenant_id=k.tenant_id
+                              AND suspension.resource_kind='active_api_keys'
+                              AND suspension.resource_id=k.id::text
+                              AND suspension.restored_at IS NULL)
+                    ) AS api_key_ready,
+                    EXISTS(
+                        SELECT 1 FROM usage_events u
+                        JOIN selected_project s ON u.project_id=s.id
+                        WHERE u.tenant_id=$1 AND u.status='succeeded'
+                    ) AS first_request_ready
+             FROM tenants t
+             JOIN tenant_memberships m ON m.tenant_id=t.id AND m.user_id=$2
+             WHERE t.id=$1",
+        )
+        .bind(tenant_id.to_string())
+        .bind(user_id)
+        .bind(project_id)
+        .fetch_optional(&self.pool)
+        .await
+        .map_err(map_error)?
+        .ok_or(WebAuthError::Forbidden)?;
+        Ok(OnboardingFacts {
+            auto_open: row
+                .try_get("onboarding_auto_open")
+                .map_err(|_| WebAuthError::Unavailable)?,
+            seen_at: row
+                .try_get("onboarding_seen_at")
+                .map_err(|_| WebAuthError::Unavailable)?,
+            collapsed_at: row
+                .try_get("onboarding_collapsed_at")
+                .map_err(|_| WebAuthError::Unavailable)?,
+            project_id: row
+                .try_get("project_id")
+                .map_err(|_| WebAuthError::Unavailable)?,
+            project_ready: row
+                .try_get("project_ready")
+                .map_err(|_| WebAuthError::Unavailable)?,
+            provider_ready: row
+                .try_get("provider_ready")
+                .map_err(|_| WebAuthError::Unavailable)?,
+            route_ready: row
+                .try_get("route_ready")
+                .map_err(|_| WebAuthError::Unavailable)?,
+            api_key_ready: row
+                .try_get("api_key_ready")
+                .map_err(|_| WebAuthError::Unavailable)?,
+            first_request_ready: row
+                .try_get("first_request_ready")
+                .map_err(|_| WebAuthError::Unavailable)?,
+        })
+    }
+
+    async fn update_onboarding_display(
+        &self,
+        tenant_id: Uuid,
+        user_id: Uuid,
+        display: OnboardingDisplay,
+    ) -> Result<(), WebAuthError> {
+        let collapsed = display == OnboardingDisplay::Collapsed;
+        affected(
+            sqlx::query(
+                "UPDATE tenant_memberships
+                 SET onboarding_seen_at=COALESCE(onboarding_seen_at,now()),
+                     onboarding_collapsed_at=CASE WHEN $3 THEN now() ELSE NULL END
+                 WHERE tenant_id=$1 AND user_id=$2",
+            )
+            .bind(tenant_id.to_string())
+            .bind(user_id)
+            .bind(collapsed)
+            .execute(&self.pool)
+            .await
+            .map_err(map_error)?,
+        )
     }
 }
 

@@ -520,7 +520,36 @@ test("providers discover upstream models before routes and expose explicit prici
   assert.match(providers, /Set price/)
   assert.match(providers, /input_cost_per_million/)
   assert.match(organization, /available_models/)
-  assert.match(organization, /syncProvider\(String\(form\.get\(["']id["']\)\)\)/)
+  assert.match(
+    organization,
+    /monitorProvider\(String\(form\.get\(["']id["']\)\)\)/
+  )
+  assert.match(organization, /Verifying health and models automatically/)
+  assert.doesNotMatch(organization, />\s*Check health\s*</)
+})
+
+test("new organizations get an ordered durable setup guide", () => {
+  const shell = readFileSync(join(root, "components/console-shell.tsx"), "utf8")
+  const guide = readFileSync(
+    join(root, "components/onboarding-guide.tsx"),
+    "utf8"
+  )
+  const gatewayPolicy = readFileSync(
+    join(root, "lib/gateway-route-policy.ts"),
+    "utf8"
+  )
+  assert.match(shell, /<OnboardingGuide/)
+  for (const step of [
+    "create_project",
+    "connect_provider",
+    "create_route",
+    "create_api_key",
+    "send_first_request",
+  ])
+    assert.match(guide, new RegExp(step))
+  assert.match(guide, /needs_admin/)
+  assert.match(guide, /setInterval\(progress\.reload, 3000\)/)
+  assert.match(gatewayPolicy, /auth\\\/\(tenants\|invitations\)/)
 })
 
 test("one canonical logo brands metadata, auth, picker, and sidebar", () => {

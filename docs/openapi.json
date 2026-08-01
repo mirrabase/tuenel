@@ -683,6 +683,19 @@
             "description": "Not authorized"
           }
         }
+      },
+      "post": {
+        "responses": {
+          "200": {
+            "description": "Success"
+          },
+          "401": {
+            "description": "Authentication required"
+          },
+          "403": {
+            "description": "Not authorized"
+          }
+        }
       }
     },
     "/admin/quota-limits": {
@@ -1277,6 +1290,34 @@
     },
     "/auth/tenants/{tenant_id}/members/{user_id}": {
       "delete": {
+        "responses": {
+          "200": {
+            "description": "Success"
+          },
+          "401": {
+            "description": "Authentication required"
+          },
+          "403": {
+            "description": "Not authorized"
+          }
+        }
+      },
+      "patch": {
+        "responses": {
+          "200": {
+            "description": "Success"
+          },
+          "401": {
+            "description": "Authentication required"
+          },
+          "403": {
+            "description": "Not authorized"
+          }
+        }
+      }
+    },
+    "/auth/tenants/{tenant_id}/onboarding": {
+      "get": {
         "responses": {
           "200": {
             "description": "Success"

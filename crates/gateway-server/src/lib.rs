@@ -18,8 +18,8 @@ use axum::{
 use chrono::{DateTime, Utc};
 use futures::StreamExt;
 use gateway_auth::{
-    AuthError, Authenticator, Bootstrap, LoginResult, OrganizationUpdate, Signup, WebAuthError,
-    WebAuthService,
+    AuthError, Authenticator, Bootstrap, LoginResult, OnboardingDisplay, OrganizationUpdate,
+    Signup, WebAuthError, WebAuthService,
 };
 use gateway_core::{GatewayError, GatewayRuntime};
 use gateway_entitlements::{
@@ -129,6 +129,10 @@ pub fn router(state: AppState) -> Router {
             axum::routing::patch(update_member).delete(remove_member),
         )
         .route(
+            "/auth/tenants/{tenant_id}/onboarding",
+            get(onboarding).patch(update_onboarding),
+        )
+        .route(
             "/auth/tenants/{tenant_id}",
             get(organization)
                 .patch(update_organization)
@@ -207,6 +211,7 @@ fn v03_openapi_paths() -> Vec<(&'static str, &'static [&'static str])> {
         ("/admin/tenants", &["get"]),
         ("/auth/capabilities", &["get"]),
         ("/auth/tenants/{tenant_id}/capabilities", &["get"]),
+        ("/auth/tenants/{tenant_id}/onboarding", &["get", "patch"]),
         ("/admin/projects", &["get", "post"]),
         ("/admin/projects/{id}", &["patch", "delete"]),
         ("/auth/tenants/{tenant_id}/members", &["get"]),
@@ -223,7 +228,7 @@ fn v03_openapi_paths() -> Vec<(&'static str, &'static [&'static str])> {
         ("/admin/virtual-keys", &["get", "post"]),
         ("/admin/providers", &["get", "post"]),
         ("/admin/providers/{id}", &["patch", "delete"]),
-        ("/admin/providers/{id}/models", &["get"]),
+        ("/admin/providers/{id}/models", &["get", "post"]),
         ("/admin/providers/{id}/check", &["post"]),
         ("/admin/model-routes", &["get", "post"]),
         ("/admin/model-routes/{id}", &["patch", "delete"]),
@@ -567,6 +572,45 @@ async fn organization(
         .organization(tenant_credential(&headers, tenant_id)?)
         .await
         .map(|organization| Json(json!(organization)))
+        .map_err(map_web_auth)
+}
+
+#[derive(Debug, Deserialize)]
+struct OnboardingQuery {
+    project_id: Option<String>,
+}
+
+#[derive(Debug, Deserialize)]
+struct OnboardingUpdate {
+    display: OnboardingDisplay,
+}
+
+async fn onboarding(
+    State(state): State<AppState>,
+    Path(tenant_id): Path<Uuid>,
+    Query(query): Query<OnboardingQuery>,
+    headers: HeaderMap,
+) -> Result<Json<Value>, ApiError> {
+    web_auth(&state)?
+        .onboarding(
+            tenant_credential(&headers, tenant_id)?,
+            query.project_id.as_deref(),
+        )
+        .await
+        .map(|progress| Json(json!(progress)))
+        .map_err(map_web_auth)
+}
+
+async fn update_onboarding(
+    State(state): State<AppState>,
+    Path(tenant_id): Path<Uuid>,
+    headers: HeaderMap,
+    Json(input): Json<OnboardingUpdate>,
+) -> Result<Json<Value>, ApiError> {
+    web_auth(&state)?
+        .update_onboarding_display(tenant_credential(&headers, tenant_id)?, input.display)
+        .await
+        .map(|progress| Json(json!(progress)))
         .map_err(map_web_auth)
 }
 

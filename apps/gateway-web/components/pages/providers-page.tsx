@@ -132,7 +132,6 @@ export function ProvidersPage() {
   }>()
   const [disabling, setDisabling] = React.useState<Provider>()
   const [pending, setPending] = React.useState(false)
-  const refreshedProviders = React.useRef(new Set<string>())
   const canWrite =
     session.gatewayAdmin ||
     session.tenantRole === "owner" ||
@@ -144,26 +143,6 @@ export function ProvidersPage() {
   const healthRows = Array.isArray(health.data?.providers)
     ? (health.data.providers as Row[])
     : []
-
-  React.useEffect(() => {
-    const candidates = (providers.data?.data ?? []).filter(
-      (provider) =>
-        provider.enabled !== false &&
-        !refreshedProviders.current.has(provider.id)
-    )
-    if (!candidates.length) return
-    for (const provider of candidates)
-      refreshedProviders.current.add(provider.id)
-    void Promise.allSettled(
-      candidates.map((provider) =>
-        gatewayFetch(
-          `/admin/providers/${encodeURIComponent(provider.id)}/models`,
-          session.tenantId,
-          { method: "POST" }
-        )
-      )
-    ).then(() => providers.reload())
-  }, [providers, session.tenantId])
 
   function setProviderQuery(provider?: Provider) {
     const query = new URLSearchParams(searchParams.toString())
@@ -310,7 +289,9 @@ export function ProvidersPage() {
       setPricingModel(undefined)
       toast.success("Model pricing saved")
     } catch (error) {
-      toast.error(error instanceof Error ? error.message : "Pricing save failed")
+      toast.error(
+        error instanceof Error ? error.message : "Pricing save failed"
+      )
     } finally {
       setPending(false)
     }
@@ -590,7 +571,11 @@ export function ProvidersPage() {
                         size="sm"
                         variant="outline"
                         onClick={() =>
-                          setPricingModel({ provider: modelProvider, model, price })
+                          setPricingModel({
+                            provider: modelProvider,
+                            model,
+                            price,
+                          })
                         }
                       >
                         {price ? "Update price" : "Set price"}

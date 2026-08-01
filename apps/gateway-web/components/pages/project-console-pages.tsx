@@ -1140,6 +1140,7 @@ type VirtualKey = Resource & {
 
 export function ApiKeysPage() {
   const session = useGateway()
+  const locale = usePathname().split("/")[1]
   const state = useGatewayData<Page<VirtualKey>>(
     projectPath("/admin/virtual-keys", session.tenantId, session.projectId)
   )
@@ -1391,6 +1392,7 @@ export function ApiKeysPage() {
           </div>
           <DialogFooter>
             <Button
+              variant="outline"
               onClick={() =>
                 navigator.clipboard
                   .writeText(issued)
@@ -1399,6 +1401,16 @@ export function ApiKeysPage() {
             >
               <CopyIcon data-icon="inline-start" />
               Copy API key
+            </Button>
+            <Button
+              render={
+                <Link
+                  href={`/${locale}/${session.tenantId}/project/${session.projectId}/playground`}
+                  onClick={() => setIssued("")}
+                />
+              }
+            >
+              Continue to Playground
             </Button>
           </DialogFooter>
         </DialogContent>
@@ -1452,7 +1464,9 @@ function RouteEditor({
         text(item.requested_model, "")
       )
     ),
-  ].filter(Boolean).sort()
+  ]
+    .filter(Boolean)
+    .sort()
   const [aliasMode, setAliasMode] = React.useState(
     route ? text(route.requested_model, "") : "__new__"
   )
@@ -1624,9 +1638,8 @@ function RouteEditor({
                     : aliasMode === "__new__"
                       ? 1
                       : (existingRoutes.data?.data ?? []).filter(
-                            (item) =>
-                              text(item.requested_model, "") === aliasMode
-                          ).length + 1
+                          (item) => text(item.requested_model, "") === aliasMode
+                        ).length + 1
                 }
                 readOnly
                 required
@@ -1726,7 +1739,9 @@ export function ModelsPage() {
                         <div className="space-y-1">
                           {ordered.map((target, index) => (
                             <p key={String(target.id)}>
-                              {index === 0 ? "Primary: " : `Fallback ${index}: `}
+                              {index === 0
+                                ? "Primary: "
+                                : `Fallback ${index}: `}
                               {text(target.provider)}
                             </p>
                           ))}

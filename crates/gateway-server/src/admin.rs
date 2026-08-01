@@ -8,6 +8,7 @@ use axum::{
 use gateway_admin::{AdminError, AdminService, ListQuery, Mutation, OperationalView, ResourceKind};
 use gateway_providers::{ProviderError, ProviderHealthStatus};
 use serde_json::{Value, json};
+use std::time::Duration;
 use uuid::Uuid;
 
 use super::{ApiError, AppState, RequestId, admin_principal};
@@ -87,6 +88,7 @@ macro_rules! resources {
                 .map_err(map_admin)
         }
 
+        #[allow(dead_code)]
         async fn $create(
             State(state): State<AppState>,
             axum::Extension(request_id): axum::Extension<RequestId>,
@@ -148,11 +150,84 @@ resources!(
 );
 resources!(
     providers,
-    create_provider,
+    create_provider_resource,
     update_provider,
     retire_provider,
     ResourceKind::Providers
 );
+
+async fn create_provider(
+    State(state): State<AppState>,
+    axum::Extension(request_id): axum::Extension<RequestId>,
+    headers: HeaderMap,
+    Json(body): Json<Value>,
+) -> Result<Response, ApiError> {
+    let principal = admin_principal(&state, &headers).await?;
+    let result = admin(&state)?
+        .create(&principal, ResourceKind::Providers, body, request_id.0)
+        .await
+        .map_err(map_admin)?;
+    let provider_id = result
+        .resource
+        .get("id")
+        .and_then(Value::as_str)
+        .ok_or_else(ApiError::internal)?
+        .to_owned();
+    let response = mutation_response(StatusCode::CREATED, result)?;
+    tokio::spawn(activate_provider(state, principal, provider_id));
+    Ok(response)
+}
+
+async fn activate_provider(
+    state: AppState,
+    principal: gateway_types::Principal,
+    provider_id: String,
+) {
+    let Some(repository) = state.provider_health.as_deref() else {
+        tracing::warn!(
+            provider_id,
+            "automatic provider health check is unavailable"
+        );
+        return;
+    };
+    let mut models_ready = false;
+    for attempt in 0..12 {
+        if attempt > 0 {
+            tokio::time::sleep(Duration::from_millis(750)).await;
+        }
+        let health_ready = state
+            .gateway
+            .check_provider(&provider_id, repository)
+            .await
+            .is_ok_and(|health| health.status == ProviderHealthStatus::Healthy);
+        if !models_ready {
+            if let Ok(mut models) = state.gateway.list_provider_models(&provider_id).await {
+                models.sort();
+                models.dedup();
+                if models.is_empty() {
+                    continue;
+                }
+                if let Ok(service) = admin(&state) {
+                    models_ready = service
+                        .cache_provider_models(&principal, &provider_id, &models)
+                        .await
+                        .is_ok();
+                }
+            }
+        }
+        if health_ready && models_ready {
+            tracing::info!(
+                provider_id,
+                "provider automatically verified and models synchronized"
+            );
+            return;
+        }
+    }
+    tracing::warn!(
+        provider_id,
+        "automatic provider activation remains incomplete"
+    );
+}
 resources!(
     model_routes,
     create_route,

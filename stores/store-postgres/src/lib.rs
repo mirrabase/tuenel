@@ -750,6 +750,7 @@ fn map_sqlx(error: sqlx::Error) -> StoreError {
 mod managed_quota_tests {
     use chrono::{Duration, Utc};
     use gateway_admin::{AdminRepository, MutationContext, ResourceKind};
+    use gateway_auth::{IdentityRepository, OnboardingDisplay};
     use gateway_store::GatewayStore;
     use gateway_types::{QuotaOwner, QuotaReservation};
     use uuid::Uuid;
@@ -784,6 +785,7 @@ mod managed_quota_tests {
             .connect(&database_url)
             .await
             .unwrap();
+        sqlx::migrate!("../../migrations").run(&pool).await.unwrap();
         let store = PostgresStore { pool: pool.clone() };
         let tenant_id = format!("quota-test-{}", Uuid::new_v4());
         sqlx::query("INSERT INTO tenants(id,name,slug,daily_token_limit) VALUES($1,$1,$1,1000000)")
@@ -935,6 +937,104 @@ mod managed_quota_tests {
                 .await
                 .is_err()
         );
+    }
+
+    #[tokio::test]
+    async fn onboarding_uses_live_resources_and_persists_personal_display_state() {
+        let Ok(database_url) = std::env::var("TEST_DATABASE_URL") else {
+            return;
+        };
+        let pool = PgPoolOptions::new()
+            .max_connections(2)
+            .connect(&database_url)
+            .await
+            .unwrap();
+        sqlx::migrate!("../../migrations").run(&pool).await.unwrap();
+        let store = PostgresStore { pool: pool.clone() };
+        let user_id = Uuid::now_v7();
+        let tenant_id = Uuid::now_v7();
+        let tenant = tenant_id.to_string();
+        let project_id = Uuid::now_v7().to_string();
+        sqlx::query(
+            "INSERT INTO users(id,email,password_hash,gateway_admin)
+             VALUES($1,$2,'test-hash',false)",
+        )
+        .bind(user_id)
+        .bind(format!("onboarding-{user_id}@example.com"))
+        .execute(&pool)
+        .await
+        .unwrap();
+        sqlx::query(
+            "INSERT INTO tenants(id,name,slug,daily_token_limit)
+             VALUES($1,'Onboarding test',$1,100000)",
+        )
+        .bind(&tenant)
+        .execute(&pool)
+        .await
+        .unwrap();
+        sqlx::query(
+            "INSERT INTO tenant_memberships(tenant_id,user_id,role)
+             VALUES($1,$2,'owner')",
+        )
+        .bind(&tenant)
+        .bind(user_id)
+        .execute(&pool)
+        .await
+        .unwrap();
+
+        let empty = store
+            .onboarding_facts(tenant_id, user_id, None)
+            .await
+            .unwrap();
+        assert!(empty.auto_open);
+        assert!(!empty.project_ready);
+
+        sqlx::query(
+            "INSERT INTO admin_resources(kind,id,tenant_id,body)
+             VALUES('projects',$1,$2,$3)",
+        )
+        .bind(&project_id)
+        .bind(&tenant)
+        .bind(serde_json::json!({"name":"First project"}))
+        .execute(&pool)
+        .await
+        .unwrap();
+        let with_project = store
+            .onboarding_facts(tenant_id, user_id, Some(&project_id))
+            .await
+            .unwrap();
+        assert!(with_project.project_ready);
+        assert_eq!(
+            with_project.project_id.as_deref(),
+            Some(project_id.as_str())
+        );
+
+        store
+            .update_onboarding_display(tenant_id, user_id, OnboardingDisplay::Collapsed)
+            .await
+            .unwrap();
+        let collapsed = store
+            .onboarding_facts(tenant_id, user_id, Some(&project_id))
+            .await
+            .unwrap();
+        assert!(collapsed.seen_at.is_some());
+        assert!(collapsed.collapsed_at.is_some());
+
+        sqlx::query("DELETE FROM admin_resources WHERE kind='projects' AND id=$1")
+            .bind(&project_id)
+            .execute(&pool)
+            .await
+            .unwrap();
+        sqlx::query("DELETE FROM tenants WHERE id=$1")
+            .bind(&tenant)
+            .execute(&pool)
+            .await
+            .unwrap();
+        sqlx::query("DELETE FROM users WHERE id=$1")
+            .bind(user_id)
+            .execute(&pool)
+            .await
+            .unwrap();
     }
 }
 
