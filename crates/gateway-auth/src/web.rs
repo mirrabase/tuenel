@@ -293,7 +293,6 @@ impl fmt::Debug for SessionCredential {
 #[async_trait]
 pub trait IdentityRepository: Send + Sync {
     async fn installation_initialized(&self) -> Result<bool, WebAuthError>;
-    #[allow(clippy::too_many_arguments)]
     async fn bootstrap_account(
         &self,
         user: &WebUser,
@@ -308,6 +307,7 @@ pub trait IdentityRepository: Send + Sync {
         tenant_id: Uuid,
         tenant_name: &str,
     ) -> Result<Membership, WebAuthError>;
+    #[allow(clippy::too_many_arguments)]
     async fn create_pending_registration(
         &self,
         email: &str,
