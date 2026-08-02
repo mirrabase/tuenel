@@ -308,6 +308,8 @@ struct SignupRequest {
     email: String,
     password: String,
     tenant_name: String,
+    terms_accepted: bool,
+    privacy_acknowledged: bool,
 }
 
 #[derive(Deserialize)]
@@ -375,6 +377,8 @@ async fn signup(
             email: input.email,
             password: input.password,
             tenant_name: input.tenant_name,
+            terms_accepted: input.terms_accepted,
+            privacy_acknowledged: input.privacy_acknowledged,
         })
         .await
         .map_err(map_web_auth)?;

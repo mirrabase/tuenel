@@ -128,15 +128,19 @@ impl IdentityRepository for PostgresStore {
         email: &str,
         password_hash: &str,
         tenant_name: &str,
+        terms_accepted_at: DateTime<Utc>,
+        privacy_acknowledged_at: DateTime<Utc>,
         token_hash: &[u8],
         expires_at: DateTime<Utc>,
     ) -> Result<(), WebAuthError> {
         sqlx::query(
-            "INSERT INTO pending_registrations (email,password_hash,tenant_name,token_hash,expires_at) VALUES ($1,$2,$3,$4,$5) ON CONFLICT (email) DO UPDATE SET password_hash=EXCLUDED.password_hash,tenant_name=EXCLUDED.tenant_name,token_hash=EXCLUDED.token_hash,expires_at=EXCLUDED.expires_at,created_at=now()",
+            "INSERT INTO pending_registrations (email,password_hash,tenant_name,terms_accepted_at,privacy_acknowledged_at,token_hash,expires_at) VALUES ($1,$2,$3,$4,$5,$6,$7) ON CONFLICT (email) DO UPDATE SET password_hash=EXCLUDED.password_hash,tenant_name=EXCLUDED.tenant_name,terms_accepted_at=EXCLUDED.terms_accepted_at,privacy_acknowledged_at=EXCLUDED.privacy_acknowledged_at,token_hash=EXCLUDED.token_hash,expires_at=EXCLUDED.expires_at,created_at=now()",
         )
         .bind(email)
         .bind(password_hash)
         .bind(tenant_name)
+        .bind(terms_accepted_at)
+        .bind(privacy_acknowledged_at)
         .bind(token_hash)
         .bind(expires_at)
         .execute(&self.pool)
@@ -163,7 +167,7 @@ impl IdentityRepository for PostgresStore {
         now: DateTime<Utc>,
     ) -> Result<VerificationResult, WebAuthError> {
         let mut transaction = self.pool.begin().await.map_err(map_error)?;
-        let row = sqlx::query("SELECT email,password_hash,tenant_name FROM pending_registrations WHERE token_hash=$1 AND expires_at>$2 FOR UPDATE")
+        let row = sqlx::query("SELECT email,password_hash,tenant_name,terms_accepted_at,privacy_acknowledged_at FROM pending_registrations WHERE token_hash=$1 AND expires_at>$2 FOR UPDATE")
             .bind(token_hash).bind(now).fetch_optional(&mut *transaction).await.map_err(map_error)?.ok_or(WebAuthError::Invalid)?;
         let email: String = row
             .try_get("email")
@@ -174,6 +178,12 @@ impl IdentityRepository for PostgresStore {
         let tenant_name: String = row
             .try_get("tenant_name")
             .map_err(|_| WebAuthError::Unavailable)?;
+        let terms_accepted_at: DateTime<Utc> = row
+            .try_get("terms_accepted_at")
+            .map_err(|_| WebAuthError::Unavailable)?;
+        let privacy_acknowledged_at: DateTime<Utc> = row
+            .try_get("privacy_acknowledged_at")
+            .map_err(|_| WebAuthError::Unavailable)?;
         let user_id = Uuid::now_v7();
         let tenant_id = Uuid::now_v7();
         sqlx::query(
@@ -182,6 +192,21 @@ impl IdentityRepository for PostgresStore {
         .bind(user_id)
         .bind(&email)
         .bind(password_hash)
+        .execute(&mut *transaction)
+        .await
+        .map_err(map_error)?;
+        sqlx::query(
+            "INSERT INTO user_legal_consents (user_id,policy,policy_url,policy_version,accepted_at) VALUES ($1,$2,$3,$4,$5),($1,$6,$7,$8,$9)",
+        )
+        .bind(user_id)
+        .bind("terms_of_service")
+        .bind(gateway_auth::TERMS_OF_SERVICE_URL)
+        .bind(gateway_auth::TERMS_OF_SERVICE_VERSION)
+        .bind(terms_accepted_at)
+        .bind("privacy_policy")
+        .bind(gateway_auth::PRIVACY_POLICY_URL)
+        .bind(gateway_auth::PRIVACY_POLICY_VERSION)
+        .bind(privacy_acknowledged_at)
         .execute(&mut *transaction)
         .await
         .map_err(map_error)?;

@@ -186,6 +186,7 @@ services:
       GATEWAY_API_URL: http://gateway:8080
       GATEWAY_PUBLIC_URL: ${GATEWAY_PUBLIC_URL:-https://${TUENEL_API_DOMAIN:?Set TUENEL_API_DOMAIN in .env.production}/v1}
       WEB_SESSION_SECRET: ${WEB_SESSION_SECRET:?Set WEB_SESSION_SECRET in .env.production}
+      WEB_SESSION_COOKIE_SECURE: ${WEB_SESSION_COOKIE_SECURE:-true}
       PORT: 3000
       HOSTNAME: 0.0.0.0
     depends_on:

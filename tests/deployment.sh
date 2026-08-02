@@ -37,6 +37,7 @@ printf '%s\n' "$direct" | grep -q 'AUTH_REGISTRATION_MODE: invite_only'
 printf '%s\n' "$direct" | grep -q 'AUTH_INVITATION_DELIVERY: manual'
 printf '%s\n' "$direct" | grep -q 'TUENEL_DEPLOYMENT_MODE: standalone'
 printf '%s\n' "$direct" | grep -q 'AUTH_BOOTSTRAP_TOKEN_HASH: aaaaaaaaaa'
+printf '%s\n' "$direct" | grep -q 'WEB_SESSION_COOKIE_SECURE: "false"'
 
 host_development=$(docker compose --env-file infra/dev/.env.example -f infra/dev/compose.yaml config)
 host_development_services=$(docker compose --env-file infra/dev/.env.example -f infra/dev/compose.yaml config --services)
@@ -98,6 +99,7 @@ printf '%s\n' "$production" | grep -q 'Host(`api.tuenel.example.com`) || Host(`t
 printf '%s\n' "$production" | grep -q 'tuenel-api.priority: "100"'
 printf '%s\n' "$production" | grep -q 'GATEWAY_PUBLIC_URL: https://api.tuenel.example.com/v1'
 printf '%s\n' "$production" | grep -q 'NEXT_PUBLIC_APP_URL: https://tuenel.example.com'
+printf '%s\n' "$production" | grep -q 'WEB_SESSION_COOKIE_SECURE: "true"'
 if printf '%s\n' "$production" | grep -Eq 'PathPrefix\\(`/admin`\\)|mock|bootstrap|smoke'; then
   exit 1
 fi

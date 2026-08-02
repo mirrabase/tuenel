@@ -6,7 +6,7 @@ on:
     tags: ["v*.*.*"]
 
 permissions:
-  contents: read
+  contents: write
   id-token: write
   packages: write
   attestations: write
@@ -17,11 +17,15 @@ concurrency:
 
 jobs:
   validate:
+    if: startsWith(github.ref, 'refs/tags/')
     uses: ./.github/workflows/ci.yml
+    with:
+      build_web: false
 
   publish:
     name: Publish ${{ matrix.name }}
     needs: validate
+    if: always() && (github.ref == 'refs/heads/main' || needs.validate.result == 'success')
     runs-on: ubuntu-latest
     strategy:
       matrix:
@@ -68,10 +72,33 @@ jobs:
           file: ${{ matrix.dockerfile }}
           platforms: linux/amd64
           push: true
+          cache-from: type=gha,scope=tuenel-public-${{ matrix.name }}
+          cache-to: type=gha,mode=max,scope=tuenel-public-${{ matrix.name }}
           tags: ${{ steps.meta.outputs.tags }}
           labels: ${{ steps.meta.outputs.labels }}
           sbom: true
           provenance: mode=max
+
+      - name: Write image manifest entry
+        env:
+          IMAGE: ${{ matrix.image }}
+          DIGEST: ${{ steps.build.outputs.digest }}
+          NAME: ${{ matrix.name }}
+        run: |
+          jq -n \
+            --arg name "$NAME" \
+            --arg image "$IMAGE" \
+            --arg digest "$DIGEST" \
+            --arg commit "$GITHUB_SHA" \
+            '{name: $name, image: $image, digest: $digest, commit: $commit}' \
+            > "image-${NAME}.json"
+
+      - name: Upload image manifest entry
+        uses: actions/upload-artifact@v4
+        with:
+          name: public-image-${{ matrix.name }}
+          path: image-${{ matrix.name }}.json
+          if-no-files-found: error
 
       - name: Attest image provenance
         uses: actions/attest-build-provenance@v2
@@ -88,3 +115,45 @@ jobs:
           IMAGE: ${{ matrix.image }}
           DIGEST: ${{ steps.build.outputs.digest }}
         run: cosign sign --yes "$IMAGE@$DIGEST"
+
+  manifest:
+    name: Publish public image manifest
+    needs: publish
+    runs-on: ubuntu-latest
+    steps:
+      - name: Download image manifest entries
+        uses: actions/download-artifact@v4
+        with:
+          pattern: public-image-*
+          path: entries
+          merge-multiple: true
+
+      - name: Build combined manifest
+        run: |
+          jq -n \
+            --arg schema "tuenel.public-images/v1" \
+            --arg ref "$GITHUB_REF_NAME" \
+            --arg commit "$GITHUB_SHA" \
+            --slurpfile images <(jq -s '.' entries/image-*.json) \
+            '{schema: $schema, ref: $ref, commit: $commit, images: $images[0]}' \
+            > image-manifest.json
+          cat image-manifest.json
+
+      - name: Upload combined manifest artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: public-image-manifest
+          path: image-manifest.json
+          if-no-files-found: error
+
+      - name: Publish manifest to the GitHub release
+        if: startsWith(github.ref, 'refs/tags/')
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          if gh release view "$GITHUB_REF_NAME" >/dev/null 2>&1; then
+            gh release upload "$GITHUB_REF_NAME" image-manifest.json --clobber
+          else
+            gh release create "$GITHUB_REF_NAME" image-manifest.json \
+              --title "Tuenel $GITHUB_REF_NAME" --generate-notes
+          fi

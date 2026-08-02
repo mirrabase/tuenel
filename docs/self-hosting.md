@@ -22,7 +22,9 @@ The installer offers:
 - **Direct HTTP:** no domain, public IP, or Traefik is required. The web
   console listens on every host interface at port `4050` and the API at
   `4060`. This mode has no TLS; restrict it with a firewall and do not expose
-  it directly to the internet.
+  it directly to the internet. Direct mode permits the session cookie over
+  HTTP so remote LAN/VPN clients can use the console; use this mode only on a
+  trusted network.
 - **Bundled Traefik:** runs the hardened production Compose stack with
   automatic Let's Encrypt certificates.
 - **Existing Traefik:** joins an existing external Traefik Docker network.

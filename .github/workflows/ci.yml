@@ -2,6 +2,11 @@ name: CI
 
 on:
   workflow_call:
+    inputs:
+      build_web:
+        required: false
+        type: boolean
+        default: true
   pull_request:
   push:
     branches: [main]
@@ -14,7 +19,9 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
-  test:
+  rust:
+    # Keep the required branch-protection check name stable while web checks
+    # run independently and can be skipped by release validation.
     name: Test and build
     runs-on: ubuntu-latest
     steps:
@@ -29,6 +36,8 @@ jobs:
 
       - name: Cache Rust
         uses: Swatinem/rust-cache@v2
+        with:
+          shared-key: public-rust-${{ runner.os }}
 
       - name: Check formatting
         run: cargo fmt --all -- --check
@@ -41,6 +50,13 @@ jobs:
 
       - name: Validate deployment configuration
         run: tests/deployment.sh
+
+  web:
+    name: Web checks
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
 
       - name: Setup pnpm
         uses: pnpm/action-setup@v6
@@ -65,3 +81,4 @@ jobs:
           pnpm lint
           pnpm typecheck
           pnpm build
+        if: ${{ github.event_name != 'workflow_call' || inputs.build_web }}

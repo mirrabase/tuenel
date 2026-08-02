@@ -8,6 +8,7 @@ import { WarningCircleIcon } from "@phosphor-icons/react"
 import { Alert, AlertDescription } from "@/components/ui/alert"
 import { Brand } from "@/components/brand"
 import { Button } from "@/components/ui/button"
+import { Checkbox } from "@/components/ui/checkbox"
 import {
   Card,
   CardContent,
@@ -16,7 +17,7 @@ import {
   CardHeader,
   CardTitle,
 } from "@/components/ui/card"
-import { Field, FieldGroup, FieldLabel } from "@/components/ui/field"
+import { Field, FieldContent, FieldGroup, FieldLabel } from "@/components/ui/field"
 import { Input } from "@/components/ui/input"
 import { Spinner } from "@/components/ui/spinner"
 import type { Locale } from "@/lib/locales"
@@ -36,6 +37,11 @@ const copy = {
     submitSignup: "Create account",
     switchLogin: "Already have an account? Sign in",
     switchSignup: "Need an account? Create one",
+    termsConsent: "I agree to the Terms of Service",
+    privacyConsent: "I acknowledge the Privacy Policy",
+    consentRequired: "Please accept the Terms of Service and acknowledge the Privacy Policy.",
+    termsLink: "Terms of Service",
+    privacyLink: "Privacy Policy",
   },
   id: {
     login: "Selamat datang kembali",
@@ -50,6 +56,11 @@ const copy = {
     submitSignup: "Buat akun",
     switchLogin: "Sudah punya akun? Masuk",
     switchSignup: "Belum punya akun? Buat akun",
+    termsConsent: "Saya menyetujui Terms of Service",
+    privacyConsent: "Saya mengakui Privacy Policy",
+    consentRequired: "Setujui Terms of Service dan akui Privacy Policy terlebih dahulu.",
+    termsLink: "Terms of Service",
+    privacyLink: "Privacy Policy",
   },
 }
 
@@ -70,13 +81,29 @@ export function AuthForm({
   const [error, setError] = React.useState<string>()
   const [verificationSent, setVerificationSent] = React.useState(false)
   const [tenantSlug, setTenantSlug] = React.useState("")
+  const [termsAccepted, setTermsAccepted] = React.useState(false)
+  const [privacyAcknowledged, setPrivacyAcknowledged] = React.useState(false)
 
   async function submit(event: React.FormEvent<HTMLFormElement>) {
     event.preventDefault()
     setPending(true)
     setError(undefined)
+    if (
+      mode === "signup" &&
+      (!termsAccepted || !privacyAcknowledged)
+    ) {
+      setError(text.consentRequired)
+      setPending(false)
+      return
+    }
     const form = new FormData(event.currentTarget)
-    const body = Object.fromEntries(form)
+    const body = {
+      ...Object.fromEntries(form),
+      ...(mode === "signup" && {
+        terms_accepted: termsAccepted,
+        privacy_acknowledged: privacyAcknowledged,
+      }),
+    }
     const response = await fetch(`/api/auth/${mode}`, {
       method: "POST",
       headers: { "content-type": "application/json" },
@@ -177,6 +204,59 @@ export function AuthForm({
                   required
                 />
               </Field>
+              {mode === "signup" && (
+                <div className="space-y-3 rounded-md border p-3">
+                  <Field orientation="horizontal" className="items-start">
+                    <Checkbox
+                      id="terms-accepted"
+                      checked={termsAccepted}
+                      onCheckedChange={setTermsAccepted}
+                      disabled={pending}
+                    />
+                    <FieldContent>
+                      <FieldLabel htmlFor="terms-accepted" className="text-sm">
+                        {text.termsConsent}.
+                      </FieldLabel>
+                      <p className="text-xs text-muted-foreground">
+                        <a
+                          href="https://mirrabase.com/terms"
+                          target="_blank"
+                          rel="noreferrer"
+                          className="underline underline-offset-2"
+                        >
+                          {text.termsLink}
+                        </a>
+                      </p>
+                    </FieldContent>
+                  </Field>
+                  <Field orientation="horizontal" className="items-start">
+                    <Checkbox
+                      id="privacy-acknowledged"
+                      checked={privacyAcknowledged}
+                      onCheckedChange={setPrivacyAcknowledged}
+                      disabled={pending}
+                    />
+                    <FieldContent>
+                      <FieldLabel
+                        htmlFor="privacy-acknowledged"
+                        className="text-sm"
+                      >
+                        {text.privacyConsent}.
+                      </FieldLabel>
+                      <p className="text-xs text-muted-foreground">
+                        <a
+                          href="https://mirrabase.com/privacy"
+                          target="_blank"
+                          rel="noreferrer"
+                          className="underline underline-offset-2"
+                        >
+                          {text.privacyLink}
+                        </a>
+                      </p>
+                    </FieldContent>
+                  </Field>
+                </div>
+              )}
               {verificationSent && (
                 <Alert>
                   <AlertDescription>{text.verificationSent}</AlertDescription>

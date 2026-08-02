@@ -9,6 +9,8 @@ import {
 } from "@/lib/server-auth"
 import { hasValidOrigin } from "@/lib/request-origin"
 
+const sessionCookieSecure = process.env.WEB_SESSION_COOKIE_SECURE !== "false"
+
 export async function GET(
   request: Request,
   { params }: { params: Promise<{ action: string }> }
@@ -177,7 +179,7 @@ export async function POST(
   const response = NextResponse.json(data, { status: upstream.status })
   response.cookies.set(SESSION_COOKIE, await seal(credential), {
     httpOnly: true,
-    secure: process.env.NODE_ENV === "production",
+    secure: sessionCookieSecure,
     sameSite: "lax",
     path: "/",
     maxAge: SESSION_SECONDS,
