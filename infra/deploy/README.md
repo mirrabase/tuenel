@@ -10,7 +10,9 @@ The interactive wizard offers three modes:
 
 - **Direct:** no domain, public IP, or Traefik is required. The web console is
   published on `0.0.0.0:4050` and the API on `0.0.0.0:4060`. Traffic is plain
-  HTTP, so use a firewall and do not expose this mode directly to the internet.
+  HTTP, so use a firewall or trusted VPN and do not expose this mode directly
+  to the internet. Direct mode disables the HTTPS-only session-cookie flag so
+  remote clients can sign in over the trusted HTTP network.
 - **Bundled Traefik:** uses `compose.production.yaml`, the
   `bundled-traefik` profile, and automatic Let's Encrypt certificates.
 - **Existing Traefik:** attaches Tuenel to an existing external Docker network.

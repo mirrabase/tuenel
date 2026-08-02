@@ -64,6 +64,11 @@ test("session cookie is encrypted and hardened", () => {
   assert.match(session, /AES-GCM/)
   assert.match(authRoute, /httpOnly:\s*true/)
   assert.match(authRoute, /sameSite:\s*"lax"/)
+  assert.match(
+    authRoute,
+    /WEB_SESSION_COOKIE_SECURE[\s\S]*!==\s*"false"/
+  )
+  assert.match(authRoute, /secure:\s*sessionCookieSecure/)
   assert.doesNotMatch(authRoute, /localStorage|sessionStorage/)
 })
 
@@ -80,4 +85,13 @@ test("successful login returns through the localized tenant redirect", () => {
   const form = read("components/auth-form.tsx")
   assert.match(form, /router\.replace\(`\/\$\{locale}`\)/)
   assert.doesNotMatch(form, /router\.replace\(mode === "signup"/)
+})
+
+test("signup requires both legal consent checkboxes and links to Mirrabase policies", () => {
+  const form = read("components/auth-form.tsx")
+  assert.match(form, /terms_accepted/)
+  assert.match(form, /privacy_acknowledged/)
+  assert.match(form, /https:\/\/mirrabase\.com\/terms/)
+  assert.match(form, /https:\/\/mirrabase\.com\/privacy/)
+  assert.match(form, /!termsAccepted \|\| !privacyAcknowledged/)
 })

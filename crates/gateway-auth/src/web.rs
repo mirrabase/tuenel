@@ -18,6 +18,11 @@ const VERIFICATION_PREFIX: &str = "wv_";
 const BOOTSTRAP_PREFIX: &str = "tb_";
 const VERIFICATION_TTL: Duration = Duration::from_secs(24 * 60 * 60);
 
+pub const TERMS_OF_SERVICE_URL: &str = "https://mirrabase.com/terms";
+pub const PRIVACY_POLICY_URL: &str = "https://mirrabase.com/privacy";
+pub const TERMS_OF_SERVICE_VERSION: &str = "terms-v1";
+pub const PRIVACY_POLICY_VERSION: &str = "privacy-v1";
+
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize)]
 #[serde(rename_all = "snake_case")]
 pub enum RegistrationMode {
@@ -132,6 +137,8 @@ pub struct Signup {
     pub email: String,
     pub password: String,
     pub tenant_name: String,
+    pub terms_accepted: bool,
+    pub privacy_acknowledged: bool,
 }
 
 #[derive(Clone, Debug, Serialize)]
@@ -306,6 +313,8 @@ pub trait IdentityRepository: Send + Sync {
         email: &str,
         password_hash: &str,
         tenant_name: &str,
+        terms_accepted_at: DateTime<Utc>,
+        privacy_acknowledged_at: DateTime<Utc>,
         token_hash: &[u8],
         expires_at: DateTime<Utc>,
     ) -> Result<(), WebAuthError>;
@@ -529,6 +538,7 @@ impl WebAuthService {
         if self.registration_mode != RegistrationMode::Public {
             return Err(WebAuthError::RegistrationClosed);
         }
+        validate_signup_consent(&input)?;
         self.limit("signup", &input.email, 5).await?;
         let email = normalize_email(&input.email)?;
         validate_password(&input.password)?;
@@ -538,11 +548,14 @@ impl WebAuthService {
         let tenant_name = validate_tenant_name(&input.tenant_name)?;
         let password_hash = hash_password(&input.password)?;
         let (token, token_hash) = new_token(VERIFICATION_PREFIX);
+        let consented_at = Utc::now();
         self.repository
             .create_pending_registration(
                 &email,
                 &password_hash,
                 tenant_name,
+                consented_at,
+                consented_at,
                 &token_hash,
                 Utc::now() + chrono::Duration::from_std(VERIFICATION_TTL).unwrap(),
             )
@@ -1007,6 +1020,14 @@ fn validate_tenant_name(value: &str) -> Result<&str, WebAuthError> {
     Ok(tenant_name)
 }
 
+fn validate_signup_consent(input: &Signup) -> Result<(), WebAuthError> {
+    if input.terms_accepted && input.privacy_acknowledged {
+        Ok(())
+    } else {
+        Err(WebAuthError::Invalid)
+    }
+}
+
 fn valid_bootstrap_token(expected: &[u8], token: &str) -> bool {
     if token
         .strip_prefix(BOOTSTRAP_PREFIX)
@@ -1163,9 +1184,9 @@ mod tests {
     use uuid::Uuid;
 
     use super::{
-        OnboardingDisplay, OnboardingFacts, OnboardingStepStatus, new_session, normalize_email,
-        onboarding_progress, parse_credential, token_hash, valid_bootstrap_token,
-        validate_tenant_name,
+        OnboardingDisplay, OnboardingFacts, OnboardingStepStatus, Signup, new_session,
+        normalize_email, onboarding_progress, parse_credential, token_hash, valid_bootstrap_token,
+        validate_signup_consent, validate_tenant_name,
     };
 
     #[test]
@@ -1177,6 +1198,32 @@ mod tests {
         assert!(normalize_email("not-an-email").is_err());
         assert!(parse_credential("ws_short.00000000-0000-0000-0000-000000000000", true).is_err());
         assert_eq!(validate_tenant_name(" Acme ").unwrap(), "Acme");
+    }
+
+    #[test]
+    fn requires_both_signup_legal_consents() {
+        let base = Signup {
+            email: "person@example.com".to_owned(),
+            password: "a-secure-password".to_owned(),
+            tenant_name: "Acme".to_owned(),
+            terms_accepted: true,
+            privacy_acknowledged: true,
+        };
+        assert!(validate_signup_consent(&base).is_ok());
+        assert!(
+            validate_signup_consent(&Signup {
+                terms_accepted: false,
+                ..base.clone()
+            })
+            .is_err()
+        );
+        assert!(
+            validate_signup_consent(&Signup {
+                privacy_acknowledged: false,
+                ..base
+            })
+            .is_err()
+        );
     }
 
     #[test]

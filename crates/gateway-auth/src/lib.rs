@@ -6,9 +6,10 @@ pub use web::{
     AuthAttemptLimiter, AuthCapabilities, AuthEmailKind, AuthEmailQueue, Bootstrap,
     IdentityRepository, InvitationDelivery, InvitationResult, LoginResult, Membership,
     OnboardingDisplay, OnboardingFacts, OnboardingProgress, OnboardingStep, OnboardingStepStatus,
-    Organization, OrganizationUpdate, PendingInvitation, RegistrationMode, SessionInfo, Signup,
-    SignupResult, TenantRole, TrustedSessionIssuer, VerificationEmailSender, VerificationResult,
-    WebAuthError, WebAuthService, WebUser,
+    Organization, OrganizationUpdate, PRIVACY_POLICY_URL, PRIVACY_POLICY_VERSION,
+    PendingInvitation, RegistrationMode, SessionInfo, Signup, SignupResult, TERMS_OF_SERVICE_URL,
+    TERMS_OF_SERVICE_VERSION, TenantRole, TrustedSessionIssuer, VerificationEmailSender,
+    VerificationResult, WebAuthError, WebAuthService, WebUser,
 };
 
 use std::{sync::Arc, time::Duration};
