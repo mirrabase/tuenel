@@ -20,7 +20,9 @@ concurrency:
 
 jobs:
   rust:
-    name: Rust checks
+    # Keep the required branch-protection check name stable while web checks
+    # run independently and can be skipped by release validation.
+    name: Test and build
     runs-on: ubuntu-latest
     steps:
       - name: Checkout
