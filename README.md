@@ -11,6 +11,25 @@ existing Community behavior behind a paywall.
 
 ## Quick start
 
+Install directly on a Docker host with the short bootstrap command:
+
+```sh
+curl -fsSL https://install.tuenel.com | sh
+```
+
+The command downloads the pinned stable release and opens the installation
+wizard. To select a mode without the wizard, pass it after `sh -s --`:
+
+```sh
+curl -fsSL https://install.tuenel.com | sh -s -- direct
+```
+
+The `install.tuenel.com` URL is a Cloudflare redirect to the repository's
+bootstrap script. See the [short installer setup guide](docs/short-installer.md)
+if configuring the domain for a self-hosted deployment.
+
+For a checked-out repository, the equivalent command remains:
+
 ```sh
 ./install.sh
 ```
