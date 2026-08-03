@@ -13,6 +13,25 @@ Docker socket boundary, use
 
 Requirement: Docker Engine with Compose v2.
 
+The shortest installation command downloads the pinned stable release and
+starts the normal wizard:
+
+```sh
+curl -fsSL https://install.tuenel.com | sh
+```
+
+Choose a mode directly when needed:
+
+```sh
+curl -fsSL https://install.tuenel.com | sh -s -- direct
+curl -fsSL https://install.tuenel.com | sh -s -- bundled-traefik
+curl -fsSL https://install.tuenel.com | sh -s -- existing-traefik
+```
+
+The bootstrap accepts `TUENEL_VERSION=X.Y.Z` to select another published
+release. For local development or offline review, clone the repository and
+run `./install.sh` instead.
+
 ```sh
 ./install.sh
 ```
