@@ -12,39 +12,39 @@ rust-version = "1.85"
 [workspace.dependencies]
 async-trait = "0.1"
 async-stream = "0.3"
-aes-gcm = "0.10"
+aes-gcm = "0.11"
 argon2 = "0.5"
 aws-lc-rs = { version = "1.17", features = ["prebuilt-nasm"] }
 axum = "0.8"
-base64 = "0.22"
+base64 = "0.23"
 bytes = "1"
 chrono = { version = "0.4", features = ["serde"] }
 eventsource-stream = "0.2"
 futures = "0.3"
 http = "1"
-hmac = "0.12"
+hmac = "0.13"
 jsonwebtoken = { version = "10.2", default-features = false, features = ["aws_lc_rs"] }
 prometheus = "0.14"
-opentelemetry = "0.28"
-opentelemetry-otlp = { version = "0.28", features = ["grpc-tonic"] }
-opentelemetry_sdk = { version = "0.28", features = ["rt-tokio"] }
-rand = "0.8"
-redis = { version = "0.32", features = ["tokio-comp"] }
+opentelemetry = "0.32"
+opentelemetry-otlp = { version = "0.32", features = ["grpc-tonic"] }
+opentelemetry_sdk = { version = "0.32", features = ["rt-tokio"] }
+rand = "0.10"
+redis = { version = "1.2", features = ["tokio-comp"] }
 regex = "1"
 reqwest = { version = "0.12", default-features = false, features = ["json", "stream", "rustls-tls"] }
 rust_decimal = { version = "1", features = ["serde"] }
 secrecy = { version = "0.10", features = ["serde"] }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
-sha2 = "0.10"
+sha2 = "0.11"
 sqlx = { version = "0.8", features = ["runtime-tokio", "postgres", "chrono", "uuid", "rust_decimal", "migrate"] }
 thiserror = "2"
 tokio = { version = "1", features = ["full"] }
 tokio-stream = "0.1"
 tower = "0.5"
-tower-http = { version = "0.6", features = ["catch-panic", "limit", "request-id", "trace"] }
+tower-http = { version = "0.7", features = ["catch-panic", "limit", "request-id", "trace"] }
 tracing = "0.1"
-tracing-opentelemetry = "0.29"
+tracing-opentelemetry = "0.33"
 tracing-subscriber = { version = "0.3", features = ["env-filter", "json"] }
 url = "2"
 utoipa = { version = "5", features = ["axum_extras", "chrono", "uuid"] }
